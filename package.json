@@ -1,0 +1,46 @@
+{
+  "name": "clitafl",
+  "version": "2.0.0",
+  "description": "The ultimate Tafl game in your terminal: five historical Viking board games (tablut, copenhagen, brandub, ard-ri, tawlbwrdd) with a search AI, animations and a full CLI.",
+  "main": "src/index.js",
+  "bin": {
+    "clitafl": "./src/index.js",
+    "tafl": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\"",
+    "start": "node src/index.js play",
+    "demo": "node src/index.js demo",
+    "match": "node src/index.js match",
+    "variants": "node src/index.js variants"
+  },
+  "keywords": [
+    "tafl",
+    "hnefatafl",
+    "tablut",
+    "brandub",
+    "viking",
+    "board-game",
+    "cli",
+    "game",
+    "strategy",
+    "ai",
+    "negamax",
+    "node"
+  ],
+  "author": "William Gacquer",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {},
+  "devDependencies": {},
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "QUICKSTART.md",
+    "FILES.md",
+    "LICENSE"
+  ]
+}

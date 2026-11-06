@@ -1,0 +1,91 @@
+# Project summary
+
+## What it is
+
+`clitafl` is a terminal Tafl game: five historical Viking/Celtic board games driven by one
+rules engine, a search AI, an animated renderer, saves, records and headless play.
+JavaScript on Node.js 20+, CommonJS, **no runtime dependencies**.
+
+```
+82 tests · 13 source files · ~2 200 lines of engine, AI, UI and CLI
+```
+
+## Why version 2 exists
+
+The first version was reviewed and found to be unplayable outside its own test bench:
+it needed three npm packages that were never installed on the target machine, its test
+runner was a hand-written script, the AI was a one-ply greedy stub, the rules were
+hardcoded to one 11×11 position, and the docs described features that did not exist
+(emoji pieces, a menu, "minimax-like" search, 15 tests).
+
+Everything on that list is fixed:
+
+| problem | now |
+| --- | --- |
+| `chalk`, `commander`, `readline-sync` required, `npm install` fails offline | zero dependencies: own ANSI writer, `node:util.parseArgs`, `node:readline/promises` |
+| tests needed jest (`npm test` broken) | one runner: `node --test`, 81 tests, no download |
+| the AI scored moves 1 ply deep and called it minimax | negamax + alpha-beta + iterative deepening + time budget, real mate lines, four documented levels |
+| one fixed 11×11 position, defenders moving first | five sourced variants in a declarative rule table, symmetric setup generator, `--size` for odd boards 7–15, attackers open every game |
+| rules hardcoded (corner escape, 4-attacker king, edge as captor) | castle layouts, empty-castle captors, per-variant king-capture counts, edge shield, siege win, no-move and repetition rules, ply limit |
+| captures were applied on cloned boards | apply/undo in place, exact inverses, covered by tests |
+| docs and README claimed features that were not there | README, QUICKSTART, FILES and this file describe the shipped code, and the CLI is covered by tests that run it |
+| the renderer wrote to a shared board while animating | animation draws on a copy; a test asserts the game board is untouched |
+| legend showed piece counts that were always 0 | legend counts the pieces on the board |
+| `moves` listed squares without destinations | `moves` lists `d5->d6, d5->d7` per piece |
+| `board` was not a command, so it was parsed as a move | `board`, `history` are commands, listed in `help` |
+| nothing was under version control, no licence | `git` history started, ISC `LICENSE`, `.gitignore` no longer hides `package-lock.json` |
+
+## Design decisions
+
+- **Data, not code, for the rules.** A variant is a row in `src/rules/variants.js`:
+  escape target, castle layout, capture counts, first mover, edge shield, siege, no-move,
+  repetition, ply limit. Adding a game means adding a row, and the engine, renderer,
+  rules text and tests pick it up.
+- **The engine knows no terminal.** `src/rules/*` has no colours, no prompts, no `console`.
+  That is what makes headless play, tests and the CLI thin.
+- **No per-node allocation in the search.** Moves are applied and un-applied on the live
+  board, so the budget buys depth instead of garbage.
+- **Deterministic where it matters.** A seed drives the AI, so `match --seed 3`
+  reproduces a game — used by the tests and by records.
+- **Claims are checked by tests.** The historical armies, the king-capture counts, the
+  siege rule and the CLI surface each have a test, so the README cannot drift.
+
+## Historical accuracy
+
+Rule sets follow the documented sources: Linnaeus' 1732 tablut (throne off limits to all
+pieces, an empty castle acts as a captor, the king needs four attackers on the throne and
+three beside it, edge escape, repetition and no-move are draws), the Fetlar/Copenhagen
+rules (corner escape, throne and corners are castles, four attackers in the open field,
+the king is safe on the edge, sealing the host wins, no-move loses), and the Irish/Welsh
+reconstructions for brandub, ard-ri and tawlbwrdd. Sources: tafl.cyningstan.com,
+aagenielsen.dk, Wikipedia's tafl article. Brandub's and Ard Rí's starting positions are
+reconstructions; the variant file says so.
+
+## Layout
+
+```
+src/rules/     pieces · variants · board · game · notation
+src/ai/        evaluate · search · player
+src/ui/        ansi · display
+src/cli/       controller
+src/           headless.js · index.js
+tests/         board · game · notation · ai · display · headless · cli (+ helpers)
+```
+
+## Status
+
+- Rules: complete for the five variants, including the special ones (siege, castle
+  captors, edge shield, per-square king capture counts).
+- AI: search-based, four levels, seeded; plays out every variant headlessly.
+- CLI: `play`, `demo`, `match`, `variants`, `rules`, `help`; flags for seats, strength,
+  budget, size, seeds, scripts, saves, records, plain-ASCII and colour-off.
+- Tests: 82, all green, `npm test`, no dependencies.
+- Docs: README, QUICKSTART, FILES, this summary, ISC licence.
+
+## Roadmap
+
+- Alea evangelii (19×19): the engine supports the size, the search needs a bigger budget
+  and an opening book before the games are fun to watch.
+- Search upgrades for `grandmaster`: transposition table, killer moves, quiescence on
+  captures.
+- Two-machine play.
