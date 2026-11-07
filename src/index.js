@@ -58,7 +58,7 @@ Commands
 
 Options
   -v, --variant <name>      ${VARIANT_IDS.join(' | ')} (default tablut)
-      --size <n>            override the board size (odd, 7-15)
+      --size <n>            override the board size (odd, 7-19)
       --human <side>        which side a human plays: attacker | defender | both | none
       --level <name>        AI strength: ${LEVEL_IDS.join(' | ')}
       --level-a / --level-d strength per side (attacker / defender)
@@ -227,7 +227,7 @@ function listVariants() {
   for (const row of rows) {
     const army = `king+${row.defenders} vs ${row.attackers}`;
     lines.push(`  ${row.name.padEnd(width)}  ${String(row.size).padStart(2)}x${row.size}  `
-      + `${army.padStart(15)}  escapes to ${row.escape}`);
+      + `${army.padStart(17)}  escapes to ${row.escape === 'cornerblock' ? 'the marked corners' : row.escape}`);
   }
   lines.push('');
   lines.push('Play one: clitafl play --variant <id>   (ids: ' + rows.map((r) => r.id).join(', ') + ')');

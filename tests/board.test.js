@@ -4,9 +4,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { Board } = require('../src/rules/board');
+const { Game } = require('../src/rules/game');
 const { getVariant, VARIANTS } = require('../src/rules/variants');
 const { KING, DEFENDER, ATTACKER, EMPTY, SIDE_ATTACKER, SIDE_DEFENDER } = require('../src/rules/pieces');
 const { makeBoard, idx, move } = require('./helpers');
+
+/** An empty board of the variant with a few pieces placed, for geometry probes. */
+function aleaPlaced(cells) {
+  const board = new Board(getVariant('alea'));
+  for (const [r, c, code] of cells) board.set(r, c, code);
+  board.kingPos = board.indexOf(KING);
+  return board;
+}
 
 test('tablut setup matches the historical army', () => {
   const board = Board.fromVariant(getVariant('tablut'));
@@ -313,11 +322,123 @@ test('the king side is sealed in when walled off by attackers', () => {
 test('every variant declares a complete rule set', () => {
   for (const id of Object.keys(VARIANTS)) {
     const v = VARIANTS[id];
-    assert.ok(['edge', 'corner'].includes(v.escape), `${id} escape`);
-    assert.ok(['none', 'throne', 'corners', 'throne-corners'].includes(v.castles), `${id} castles`);
+    assert.ok(['edge', 'corner', 'cornerblock'].includes(v.escape), `${id} escape`);
+    const castles = ['none', 'throne', 'corners', 'throne-corners', 'throne-cornerblocks'];
+    assert.ok(castles.includes(v.castles), `${id} castles`);
     assert.ok([SIDE_ATTACKER, SIDE_DEFENDER].includes(v.first), `${id} first move`);
     assert.ok(v.kingCapture.elsewhere >= 2, `${id} king capture`);
     assert.ok(v.maxPlies > 0, `${id} move limit`);
     assert.equal(v.size % 2, 1, `${id} odd size`);
   }
+});
+
+test('alea evangelii: the manuscript army on a 19x19 board', () => {
+  const board = Board.fromVariant(getVariant('alea'));
+  assert.equal(board.size, 19);
+  assert.equal(board.countOf(SIDE_DEFENDER), 25, 'king + 24 dukes');
+  assert.equal(board.countOf(SIDE_ATTACKER), 48, '48 counts');
+  assert.equal(board.get(9, 9), KING, 'the king opens on the central castle');
+  for (const [r, c] of [[0, 0], [1, 1], [18, 18], [17, 18], [0, 17], [1, 16]]) {
+    assert.equal(board.get(r, c), EMPTY, `the marked square ${r},${c} starts empty`);
+  }
+  let same = true;
+  for (let r = 0; r < 19; r += 1) {
+    for (let c = 0; c < 19; c += 1) {
+      if (board.get(r, c) !== board.get(c, 18 - r)) same = false;
+    }
+  }
+  assert.ok(same, 'the reconstruction is symmetric under a quarter turn');
+});
+
+test('alea: the 16 marked squares are the exits, and only the king may enter them', () => {
+  const board = Board.fromVariant(getVariant('alea'));
+  const exits = [];
+  for (let r = 0; r < 19; r += 1) {
+    for (let c = 0; c < 19; c += 1) {
+      if (board.isEscapeSquare(r, c)) exits.push([r, c]);
+    }
+  }
+  assert.equal(exits.length, 16, 'four marked 2x2 blocks');
+  assert.equal(board.isEscapeSquare(0, 9), false, 'the plain edge is not an exit');
+  assert.equal(board.isEscapeSquare(2, 0), false, 'only the marked block counts');
+  assert.equal(board.isCastle(0, 1), true, 'a marked square is a castle');
+  assert.equal(board.isCastle(9, 9), true, 'the citadel is a castle');
+  assert.equal(board.isCastle(5, 5), false, 'an ordinary square is not');
+
+  board.set(0, 4, DEFENDER);
+  board.set(0, 5, ATTACKER);
+  assert.equal(board.isLegalMove(idx(19, 0, 4), idx(19, 0, 1), SIDE_DEFENDER), false, 'a duke may not enter a marked square');
+  assert.equal(board.isLegalMove(idx(19, 0, 5), idx(19, 0, 1), SIDE_ATTACKER), false, 'nor may a count');
+
+  const open = aleaPlaced([[9, 3, ATTACKER]]);
+  assert.equal(open.isLegalMove(idx(19, 9, 3), idx(19, 9, 9), SIDE_ATTACKER), false, 'the citadel is off limits to all');
+  assert.equal(open.isLegalMove(idx(19, 9, 3), idx(19, 9, 15), SIDE_ATTACKER), true, 'passing over the empty citadel is legal');
+});
+
+test('alea: the king is taken by four counts on the citadel, three beside it, two in the open', () => {
+  const board = aleaPlaced([
+    [9, 8, KING],
+    [8, 8, ATTACKER],
+    [10, 13, ATTACKER],
+  ]);
+  assert.equal(board.kingCaptureNeed(9, 9), 4, 'on the citadel');
+  assert.equal(board.kingCaptureNeed(9, 8), 3, 'beside the citadel');
+  assert.equal(board.kingCaptureNeed(5, 5), 2, 'in the open field');
+
+  const taken = board.applyMove({ from: idx(19, 10, 13), to: idx(19, 10, 8) });
+  assert.deepEqual(taken.captured.map((cap) => cap.value), [KING], 'the empty citadel and two counts close the net');
+  assert.equal(board.kingAlive(), false);
+});
+
+test('alea: the king on the citadel needs all four counts, marked squares and edges take soldiers', () => {
+  const onThrone = aleaPlaced([
+    [9, 9, KING],
+    [8, 9, ATTACKER],
+    [10, 9, ATTACKER],
+    [9, 8, ATTACKER],
+    [9, 13, ATTACKER],
+  ]);
+  const three = onThrone.applyMove({ from: idx(19, 9, 13), to: idx(19, 9, 12) });
+  assert.deepEqual(three.captured, [], 'three counts around the citadel are not enough');
+  onThrone.undoMove({ from: idx(19, 9, 13), to: idx(19, 9, 12) }, three);
+  const four = onThrone.applyMove({ from: idx(19, 9, 13), to: idx(19, 9, 10) });
+  assert.deepEqual(four.captured.map((cap) => cap.value), [KING], 'the fourth count takes the king');
+
+  const marked = aleaPlaced([
+    [18, 2, DEFENDER],
+    [18, 5, ATTACKER],
+  ]);
+  const againstBlock = marked.applyMove({ from: idx(19, 18, 5), to: idx(19, 18, 3) });
+  assert.deepEqual(againstBlock.captured.map((cap) => cap.value), [DEFENDER], 'the empty marked square captures as a count');
+
+  const edge = aleaPlaced([
+    [0, 5, DEFENDER],
+    [0, 4, ATTACKER],
+    [0, 9, ATTACKER],
+  ]);
+  const againstEdge = edge.applyMove({ from: idx(19, 0, 9), to: idx(19, 0, 6) });
+  assert.deepEqual(againstEdge.captured.map((cap) => cap.value), [DEFENDER], 'a duke on the edge falls between two counts');
+});
+
+test('alea: a king that reaches a marked square has escaped, and the edge does not free him', () => {
+  const toEdge = new Game(getVariant('alea'), aleaPlaced([[10, 4, KING], [10, 15, ATTACKER]]));
+  toEdge.turn = SIDE_DEFENDER;
+  const edge = toEdge.play({ from: idx(19, 10, 4), to: idx(19, 0, 4) });
+  assert.equal(edge.status, 'playing', 'the plain edge is not an exit');
+
+  const board = aleaPlaced([[0, 4, KING], [10, 15, ATTACKER]]);
+  const game = new Game(board.variant, board);
+  game.turn = SIDE_DEFENDER;
+  const out = game.play({ from: idx(19, 0, 4), to: idx(19, 0, 1) });
+  assert.equal(out.status, 'defenders-win', 'the marked corner square is the exit');
+  assert.ok(board.kingHasEscaped);
+  assert.equal(board.get(0, 1), KING, 'the escape is settled before any capture');
+});
+
+test('board sizes run from 7 to 19 and stay odd', () => {
+  assert.equal(getVariant('tablut', 19).size, 19, 'a 19x19 tablut is allowed');
+  assert.equal(getVariant('tablut', 7).size, 7);
+  assert.throws(() => getVariant('tablut', 21), /between 7 and 19/);
+  assert.throws(() => getVariant('tablut', 5), /between 7 and 19/);
+  assert.throws(() => getVariant('tablut', 8), /must be odd/);
 });

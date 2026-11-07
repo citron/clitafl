@@ -34,6 +34,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   variants: [],
   levels: [],
+  sizes: { min: 7, max: 19, odd: true },
   game: null,
   selected: null,
   movesOfSelected: [],
@@ -81,6 +82,7 @@ async function loadSetup() {
   ]);
   state.variants = variantData.variants;
   state.levels = levelData.levels;
+  if (variantData.sizes) state.sizes = variantData.sizes;
 
   elements.variant.innerHTML = state.variants
     .map((v) => `<option value="${v.id}">${v.name} · ${v.size}×${v.size}</option>`)
@@ -105,7 +107,7 @@ function levelOptions() {
 
 function sizesFor(variant) {
   const sizes = [];
-  for (let size = 7; size <= 15; size += 2) sizes.push(size);
+  for (let size = state.sizes.min; size <= state.sizes.max; size += 2) sizes.push(size);
   return sizes.map((size) => `<option value="${size}"${size === variant.size ? ' selected' : ''}>`
     + `${size}×${size}${size === variant.size ? ' — historical' : ''}</option>`)
     .join('');
@@ -180,7 +182,7 @@ function renderBoard() {
       if (throne.has(square)) cell.classList.add('throne');
       if (escapes.has(square)) cell.classList.add('escape');
 
-      const mark = castles.has(square) ? '✦' : throne.has(square) ? '★' : escapes.has(square) ? '○' : '';
+      const mark = throne.has(square) ? '★' : escapes.has(square) ? '○' : castles.has(square) ? '✦' : '';
       if (mark) {
         const span = document.createElement('span');
         span.className = 'mark';

@@ -97,6 +97,51 @@ const VARIANTS = {
     source: 'Scottish tradition, Wikipedia (Tafl games); setup reconstructed symmetrically',
     blurb: '7x7 with a big defender host (king + 8) against 16 attackers, escape to any edge square.',
   },
+  /**
+   * Alea evangelii, the gospel game of Anglo-Saxon England (Cambridge, CCC MS
+   * 122, c. 1140). The twelve rules surviving next to the diagram, as edited by
+   * D. Walker (tafl.cyningstan.com/page/173/alea-evangelii), give:
+   *  1. 19x19, 73 pieces: a king, 24 dukes, 48 counts (the counts' numbers are
+   *     Murray's 1955 division of the diagram, the manuscript draws all pieces
+   *     black except four).
+   *  2. The counts open.
+   *  3.-4. Straight lines, no jumping, no landing on a piece.
+   *  5. Nobody may land on the central castle, not even the king once he has
+   *     left it; every piece may pass over it while it is empty.
+   *  6. Only the king may move onto the 16 marked squares of the four corners.
+   *  7. Dukes and counts are taken between two enemies on opposite sides.
+   *  8. The king is taken by four counts on the central castle, by three when he
+   *     stands next to it, and like a duke anywhere else.
+   *  9. The marked squares, empty, capture for either side, as if a piece of
+   *     their own stood there (so castleShield is 'both').
+   * 10. A piece may stand voluntarily between two enemies.
+   * 11. A king that moves onto a marked corner square has left the board and
+   *     wins: the plain board edge is not an exit, and the escape is settled
+   *     before any capture (Board.applyMove).
+   * 12. A captured king loses.
+   * The manuscript is silent on the starting colours, so the setup is the
+   * Helmfrid reconstruction (see buildSetup).
+   */
+  alea: {
+    id: 'alea',
+    name: 'Alea evangelii',
+    subtitle: 'Anglo-Saxon England, 19x19 (the gospel game, Cambridge MS CCC 122)',
+    size: 19,
+    setup: 'alea',
+    first: SIDE_ATTACKER,
+    escape: 'cornerblock',
+    castles: 'throne-cornerblocks',
+    castleShield: 'both',
+    edgeShield: true,
+    kingCapture: { onCastle: 4, besideCastle: 3, elsewhere: 2 },
+    kingSafeOnEdge: false,
+    winBySiege: false,
+    noMove: 'draw',
+    repetition: 'draw',
+    maxPlies: 600,
+    source: 'Cambridge, CCC MS 122 (c. 1140); army after H. J. R. Murray (1955), rules after D. Walker, tafl.cyningstan.com',
+    blurb: 'The biggest tafl: 19x19, king + 24 dukes against 48 counts. Only the 16 marked corner squares are exits.',
+  },
   tawlbwrdd: {
     id: 'tawlbwrdd',
     name: 'Tawlbwrdd',
@@ -120,7 +165,10 @@ const VARIANTS = {
 
 const VARIANT_IDS = Object.keys(VARIANTS);
 
-/** Resolve a variant by id, optionally resizing it (odd sizes 7..15). */
+const MIN_SIZE = 7;
+const MAX_SIZE = 19;
+
+/** Resolve a variant by id, optionally resizing it (odd sizes 7..19). */
 function getVariant(id, size = null) {
   const base = VARIANTS[id];
   if (!base) {
@@ -128,7 +176,9 @@ function getVariant(id, size = null) {
   }
   if (size === null) return base;
   if (size % 2 === 0) throw new Error(`Board size must be odd, got ${size}`);
-  if (size < 7 || size > 15) throw new Error(`Board size must be between 7 and 15, got ${size}`);
+  if (size < MIN_SIZE || size > MAX_SIZE) {
+    throw new Error(`Board size must be between ${MIN_SIZE} and ${MAX_SIZE}, got ${size}`);
+  }
   return { ...base, size, custom: true };
 }
 
@@ -156,10 +206,13 @@ function centerOf(size) {
 
 function isThrone(variant, size, r, c) {
   const c0 = centerOf(size);
-  return (variant.castles === 'throne' || variant.castles === 'throne-corners') && r === c0 && c === c0;
+  return (variant.castles === 'throne'
+    || variant.castles === 'throne-corners'
+    || variant.castles === 'throne-cornerblocks') && r === c0 && c === c0;
 }
 
 function isCornerCastle(variant, size, r, c) {
+  if (variant.castles === 'throne-cornerblocks') return isCornerBlock(size, r, c);
   if (variant.castles !== 'corners' && variant.castles !== 'throne-corners') return false;
   return (r === 0 || r === size - 1) && (c === 0 || c === size - 1);
 }
@@ -168,8 +221,18 @@ function isCastle(variant, size, r, c) {
   return isThrone(variant, size, r, c) || isCornerCastle(variant, size, r, c);
 }
 
+/**
+ * The four marked 2x2 blocks of the alea evangelii board: 16 squares, one block
+ * in each corner. They are the king's only exits and act as castles.
+ */
+function isCornerBlock(size, r, c) {
+  const last = size - 1;
+  return (r <= 1 || r >= last - 1) && (c <= 1 || c >= last - 1);
+}
+
 /** Squares the king reaches to win. */
 function isEscapeSquare(variant, size, r, c) {
+  if (variant.escape === 'cornerblock') return isCornerBlock(size, r, c);
   if (variant.escape === 'corner') return isCorner(r, c, size);
   return r === 0 || r === size - 1 || c === 0 || c === size - 1;
 }
@@ -208,10 +271,38 @@ function armyOf(variant, size) {
 const ORTH1 = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 const DIAG1 = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
 
+/** The north army of alea evangelii: 12 counts in a wedge facing the throne. */
+const ALEA_ARMY = [
+  [-8, -1], [-8, 1],
+  [-7, -3], [-7, -1], [-7, 1], [-7, 3],
+  [-6, -5], [-6, -3], [-6, -1], [-6, 1], [-6, 3], [-6, 5],
+];
+
 function buildSetup(variant, size) {
   const c = centerOf(size);
   const last = size - 1;
   const cells = [[c, c, KING]];
+
+  if (variant.setup === 'alea') {
+    // Manuscript counts (Murray 1955): a king, 24 dukes, 48 counts. The diagram
+    // in Cambridge MS CCC 122 is not radially symmetric and does not say which
+    // pieces are white, so the placement below is a documented reconstruction:
+    // the king sits boxed in his eight household dukes (as in tablut, so the
+    // counts cannot rush the throne down an open lane), a ring of 12 dukes keeps
+    // the garrison closed, the four "variegated men" of the manuscript stand as
+    // outlying dukes in the diagonal lanes between the armies (Sten Helmfrid's
+    // reading, the one that play-tests best), and four 12-man armies of counts
+    // face the centre from the outer rings.
+    for (const [dr, dc] of [...ORTH1, ...DIAG1]) cells.push([c + dr, c + dc, DEFENDER]);
+    for (const [dr, dc] of [[-4, 0], [4, 0], [0, -4], [0, 4], [-1, -3], [-1, 3], [1, -3], [1, 3], [-3, -1], [-3, 1], [3, -1], [3, 1]]) {
+      cells.push([c + dr, c + dc, DEFENDER]);
+    }
+    for (const [dr, dc] of [[-5, -5], [-5, 5], [5, -5], [5, 5]]) cells.push([c + dr, c + dc, DEFENDER]);
+    for (const [dr, dc] of ALEA_ARMY) {
+      cells.push([c + dr, c + dc, ATTACKER], [c - dr, c + dc, ATTACKER], [c + dc, c + dr, ATTACKER], [c + dc, c - dr, ATTACKER]);
+    }
+    return cells;
+  }
 
   if (variant.setup === 'ardri') {
     for (const [dr, dc] of [...ORTH1, ...DIAG1]) cells.push([c + dr, c + dc, DEFENDER]);
@@ -251,12 +342,15 @@ function buildSetup(variant, size) {
 module.exports = {
   VARIANTS,
   VARIANT_IDS,
+  MIN_SIZE,
+  MAX_SIZE,
   getVariant,
   describeVariants,
   centerOf,
   isThrone,
   isCastle,
   isCornerCastle,
+  isCornerBlock,
   isEscapeSquare,
   isCorner,
   castleEnterableBy,

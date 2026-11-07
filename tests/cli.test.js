@@ -84,8 +84,19 @@ test('`variants` lists every historical variant with its army', () => {
   assert.equal(code, 0);
   for (const id of VARIANT_IDS) assert.ok(out.includes(id), `the list has ${id}`);
   assert.match(out, /9x9/);
+  assert.match(out, /19x19/, 'the biggest tafl is in the list');
+  assert.match(out, /Alea evangelii/);
   assert.match(out, /king\+\s*\d+ vs\s+\d+/);
   assert.match(out, /escapes to (edge|corner)/);
+});
+
+test('`rules alea` explains the marked squares of the gospel game', () => {
+  const { code, out } = run(['rules', 'alea']);
+  assert.equal(code, 0);
+  assert.match(out, /Alea evangelii/);
+  assert.match(out, /19x19/);
+  assert.match(out, /16 marked squares/);
+  assert.match(out, /4 on a castle/, 'the king needs four counts on the citadel');
 });
 
 test('`rules copenhagen` explains the special rules of that variant', () => {  const { code, out } = run(['rules', 'copenhagen']);

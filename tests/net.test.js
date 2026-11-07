@@ -49,8 +49,8 @@ test('GET /api describes the API as data', () => {
 test('the catalogue endpoints list variants, sizes and levels', () => {
   const store = makeStore();
   const variants = req(store, 'GET', '/api/variants').body;
-  assert.equal(variants.variants.length, 5);
-  assert.deepEqual(variants.sizes, { min: 7, max: 15, odd: true });
+  assert.equal(variants.variants.length, 6);
+  assert.deepEqual(variants.sizes, { min: 7, max: 19, odd: true });
 
   const one = req(store, 'GET', '/api/variants/copenhagen', { query: { size: '11' } }).body;
   assert.equal(one.variant.size, 11);
@@ -60,6 +60,23 @@ test('the catalogue endpoints list variants, sizes and levels', () => {
   const levels = req(store, 'GET', '/api/levels').body;
   assert.deepEqual(levels.levels.map((l) => l.id), ['easy', 'medium', 'hard', 'grandmaster']);
   assert.ok(levels.levels.every((l) => l.label && l.depth > 0 && l.time_ms > 0));
+});
+
+test('a 19x19 alea evangelii game opens with the manuscript army', () => {
+  const store = makeStore();
+  const { game } = openGame(store, { variant: 'alea', auto: false });
+  assert.equal(game.variant.id, 'alea');
+  assert.equal(game.variant.size, 19);
+  assert.ok(game.board.rows.every((row) => /^[.KDA]{19}$/.test(row)), 'a 19x19 board in the plain rows');
+  assert.equal(game.board.counts.attackers, 48, '48 counts');
+  assert.equal(game.board.counts.defenders, 24, '24 dukes');
+  assert.equal(game.board.counts.king, 1);
+  assert.equal(game.board.escapes.length, 16, 'the four marked 2x2 blocks are the exits');
+  assert.ok(game.board.castles.includes('j10'), 'the citadel is a castle square');
+
+  const one = req(store, 'GET', '/api/variants/alea').body;
+  assert.equal(one.variant.size, 19);
+  assert.match(one.rules_text, /16 marked squares/, 'the rules text travels with the variant');
 });
 
 test('a new game arrives with the board, the seats and the moves of the side to move', () => {
@@ -250,7 +267,7 @@ test('a hint is searched without playing it', () => {
   const opened = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
   const { game } = opened;
 
-  const hint = req(store, 'POST', `/api/games/${game.id}/hint`, { body: { level: 'medium', time_ms: 40 } });
+  const hint = req(store, 'POST', `/api/games/${game.id}/hint`, { body: { level: 'medium', time_ms: 250 } });
   assert.equal(hint.status, 200);
   assert.equal(hint.body.hint.side, SIDE_ATTACKER);
   assert.match(hint.body.hint.san, /^[a-z]+\d+-[a-z]+\d+$/);

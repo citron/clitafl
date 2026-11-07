@@ -146,6 +146,10 @@ class Board {
     this.kingPos = piece === KING ? move.to : this.kingPos;
     if (piece === KING && this.isEscapeSquare(this.rowOf(move.to), this.colOf(move.to))) {
       this.kingHasEscaped = true;
+      // A king that reaches an exit has left the board, so the move ends there:
+      // no capture is resolved on top of it. The alea evangelii exits are marked
+      // castle squares, which would otherwise take the king as he lands.
+      return { captured: [], kingHasEscapedBefore };
     }
     return { captured: this.resolveCaptures(move.to, sideOf(piece)), kingHasEscapedBefore };
   }
@@ -204,6 +208,7 @@ class Board {
   }
 
   isSurrounded(r, c, victim, moverSide) {
+    if (victim === KING && this.isEscapeSquare(r, c)) return false;
     if (victim === KING && this.variant.kingSafeOnEdge && this.isOnEdge(r, c)) return false;
     const needed = victim === KING ? this.kingCaptureNeed(r, c) : 2;
     const hostile = DIRS.map(([dr, dc]) => this.captorAt(r + dr, c + dc, victim));

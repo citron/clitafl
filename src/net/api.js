@@ -234,7 +234,7 @@ const ROUTES = [
       engine: 'negamax with alpha-beta, iterative deepening, time budget',
     },
   })],
-  ['GET', 'variants', () => ({ body: { variants: V.describeVariants(), sizes: { min: 7, max: 15, odd: true } } })],
+  ['GET', 'variants', () => ({ body: { variants: V.describeVariants(), sizes: { min: V.MIN_SIZE, max: V.MAX_SIZE, odd: true } } })],
   ['GET', 'variants/:id', (store, ctx) => {
     const variant = getVariantOrThrow(ctx.params.id, ctx.query.size);
     return { body: { variant: S.variantView(variant), rules_text: S.rulesText(variant) } };

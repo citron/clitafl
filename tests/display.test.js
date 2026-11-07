@@ -40,7 +40,7 @@ test('the board is drawn with a coordinate frame and every piece on its square',
 
 test('the file letters sit on their column, on every board size', () => {
   const display = plain();
-  for (const size of [7, 9, 11, 13, 15]) {
+  for (const size of [7, 9, 11, 13, 15, 17, 19]) {
     const lines = display.boardLines(Game.create('tablut', size).board);
     const header = lines[0];
     const footer = lines[lines.length - 1];
@@ -94,6 +94,11 @@ test('the status line tells the turn, the ply and how the king escapes', () => {
   assert.match(lines, /turn attackers/, 'the attackers open');
   assert.match(lines, /ply 0/);
   assert.match(lines, /king escapes to a corner/);
+
+  const alea = plain().statusLines(Game.create('alea')).join(' ');
+  assert.match(alea, /19x19/);
+  assert.match(alea, /king escapes to the 16 marked squares/);
+  assert.ok(!/king escapes to the edge/.test(alea), 'the plain edge is not an exit in alea');
 });
 
 test('the outcome line names the winner and the reason', () => {
@@ -161,6 +166,15 @@ test('the rules text spells out the army, the escape and the capture rule', () =
   assert.match(text, /Attackers move first/);
   assert.match(text, /any edge square/);
   assert.match(text, /throne/, 'the throne is explained');
+});
+
+test('the alea evangelii rules text explains the marked squares and the citadel', () => {
+  const text = plain().rulesText(getVariant('alea', null));
+  assert.match(text, /king \+ 24 defenders vs 48 attackers/);
+  assert.match(text, /16 marked squares/, 'the 16 exits are named');
+  assert.match(text, /plain board edge is not an exit/, 'the edge is not an exit');
+  assert.match(text, /Nobody may land on the citadel/, 'the central castle is off limits');
+  assert.match(text, /The king needs 2 attackers to be captured \(3 beside a castle, 4 on a castle\)/);
 });
 
 test('the moves list is readable notation', () => {

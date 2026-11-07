@@ -103,7 +103,11 @@ class Display {
     const turn = game.turn === SIDE_DEFENDER
       ? ansi.style("defenders", 'brightBlue')
       : ansi.style("attackers", 'brightRed');
-    const escape = v.escape === 'corner' ? 'a corner' : 'the edge';
+    const escape = v.escape === 'corner'
+      ? 'a corner'
+      : v.escape === 'cornerblock'
+        ? 'the 16 marked squares'
+        : 'the edge';
     return [
       ansi.style(`${v.name}`, 'bold')
         + ansi.style(`  ${v.size}x${v.size}  king escapes to ${escape}`, 'gray'),
@@ -213,11 +217,15 @@ class Display {
       'Pieces move any distance orthogonally, never jumping over a piece.',
       variant.escape === 'corner'
         ? 'The king wins by reaching a corner square.'
-        : 'The king wins by reaching any edge square.',
+        : variant.escape === 'cornerblock'
+          ? 'The king wins by reaching one of the 16 marked squares in the corners; the plain board edge is not an exit.'
+          : 'The king wins by reaching any edge square.',
       'The attackers win by capturing the king.',
       variant.castles === 'none'
         ? 'No special squares.'
-        : `Castle squares (${variant.castles}) block movement and act as a captor when empty.`,
+        : variant.castles === 'throne-cornerblocks'
+          ? 'Castle squares: the central citadel and the 16 marked corner squares. Nobody may land on the citadel, only the king may enter the marked squares, and an empty castle captures.'
+          : `Castle squares (${variant.castles}) block movement and act as a captor when empty; only the king may step onto a castle that is one of his escape squares.`,
       variant.edgeShield
         ? 'The board edge acts as a captor.'
         : 'The board edge does not capture: a piece needs enemies on both sides.',
