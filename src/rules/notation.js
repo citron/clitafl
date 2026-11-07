@@ -43,10 +43,17 @@ function formatMove(size, move) {
   return `${formatSquare(size, move.from)}-${formatSquare(size, move.to)}`;
 }
 
+/** Record form: `d5-d6`, or `d5xe5` when the move takes a piece. */
+function formatSan(size, move, capturedCount = 0) {
+  const from = formatSquare(size, move.from);
+  const to = formatSquare(size, move.to);
+  return `${from}${capturedCount ? 'x' : '-'}${to}`;
+}
+
 function formatCaptures(size, captured) {
   if (!captured.length) return '';
   const names = { 1: 'king', 2: 'defender', 3: 'attacker' };
   return captured.map((cap) => `${names[cap.value]}@${formatSquare(size, cap.i)}`).join(', ');
 }
 
-module.exports = { formatSquare, parseSquare, formatMove, parseMove, formatCaptures, LETTERS };
+module.exports = { formatSquare, parseSquare, formatMove, formatSan, parseMove, formatCaptures, LETTERS };

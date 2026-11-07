@@ -129,6 +129,25 @@ class Game {
     return { status, winner, reason };
   }
 
+  /** The side to move has no legal move: the variant decides loss or draw. */
+  declareNoMove(side = this.turn) {
+    const label = side === SIDE_ATTACKER ? 'attackers' : 'defenders';
+    const other = side === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER;
+    if (this.variant.noMove === 'loss') {
+      const status = other === SIDE_ATTACKER ? STATUS_ATTACKERS_WIN : STATUS_DEFENDERS_WIN;
+      return this.finish(status, other, `${label} have no legal move.`);
+    }
+    return this.finish(STATUS_DRAW, null, `${label} have no legal move.`);
+  }
+
+  /** One side gives up. */
+  resign(side = this.turn) {
+    const winner = side === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER;
+    const label = side === SIDE_ATTACKER ? 'attackers' : 'defenders';
+    const status = winner === SIDE_ATTACKER ? STATUS_ATTACKERS_WIN : STATUS_DEFENDERS_WIN;
+    return this.finish(status, winner, `${label} resigned.`);
+  }
+
   /** Undo the last `n` plies. */
   undo(n = 1) {
     let undone = 0;

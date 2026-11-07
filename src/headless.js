@@ -2,7 +2,7 @@
 
 const { Game } = require('./rules/game');
 const { AIPlayer } = require('./ai/player');
-const { formatMove, formatCaptures } = require('./rules/notation');
+const { formatMove, formatSan, formatCaptures } = require('./rules/notation');
 const { SIDE_ATTACKER, SIDE_DEFENDER } = require('./rules/pieces');
 
 /** Deterministic RNG so scripted games and tests are reproducible. */
@@ -56,7 +56,7 @@ function playMatch(options = {}) {
       ply: game.ply,
       side: result.side,
       notation: result.notation,
-      san: sanOf(result.notation, result.captured.length),
+      san: formatSan(game.board.size, result.move, result.captured.length),
       captured: result.captured.map((cap) => cap.value),
       status: game.status,
     });
@@ -80,13 +80,6 @@ function playMatch(options = {}) {
     size: game.board.size,
     isGameOver: game.isGameOver(),
   };
-}
-
-/** A record-friendly move: `d5-d6`, or `d5xe5` when it takes something. */
-function sanOf(notation, captures) {
-  if (!captures) return notation;
-  const [from, to] = notation.split('-');
-  return `${from}x${to}`;
 }
 
 function sideLabel(side) { return side === SIDE_DEFENDER ? 'Defender' : 'Attacker'; }

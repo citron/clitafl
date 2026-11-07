@@ -172,14 +172,7 @@ class GameController {
     }
   }
   declareNoMove(side) {
-    const label = this.sideLabel(side);
-    const other = side === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER;
-    if (this.game.variant.noMove === 'loss') {
-      const status = other === SIDE_ATTACKER ? 'attackers-win' : 'defenders-win';
-      this.game.finish(status, other, `${label} have no legal move.`);
-    } else {
-      this.game.finish('draw', null, `${label} have no legal move.`);
-    }
+    this.game.declareNoMove(side);
   }
 
   /** @returns 'move' to continue the game, 'quit' to leave, 'noop' to re-prompt. */
@@ -228,9 +221,7 @@ class GameController {
       return 'noop';
     }
     if (lower === 'resign') {
-      const winner = side === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER;
-      const status = winner === SIDE_ATTACKER ? 'attackers-win' : 'defenders-win';
-      this.game.finish(status, winner, `${this.sideLabel(side)} resigned.`);
+      this.game.resign(side);
       this.render();
       return 'quit';
     }
