@@ -15,7 +15,7 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 143 tests.
+`npm start` does the same as the first line. `npm test` runs the 150 tests.
 
 ## Play in the browser
 
@@ -106,12 +106,18 @@ seed included. `GET /api/health` says which directory is in use.
 node src/index.js play --level hard
 node src/index.js play --level-a easy --level-d hard   # weak attackers, strong defenders
 node src/index.js play --time 5000                     # more thinking per move
+node src/index.js play --nodes 200000                  # a move that costs the same on any machine
+node src/index.js play --nodes 60000 --depth 4         # a move that stays inside that ceiling
 ```
 
 `hard` and `grandmaster` open from the prepared book (`src/ai/book.json`, made by
 `node tools/make-book.js`) and keep a transposition table between moves, so a long session
-gets stronger as it goes. `match` runs on a node budget (`maxNodes`), which is why the same
-seed always gives the same game.
+gets stronger as it goes. `--time` is an elapsed-time budget, so what a move costs depends
+on the machine; `--nodes` stops the search on a count of visited nodes and never reads the
+clock, which is why a node ceiling buys the same work everywhere, and why `match` — which
+runs on one (`maxNodes`) — gives the same game from the same seed. `--depth` caps how deep
+the search goes, which is what keeps a move inside the node ceiling it was given. The API
+takes the same three numbers per seat: see `GET /api`.
 
 ## Plain terminal
 

@@ -47,11 +47,11 @@ const elements = {};
 
 function cacheElements() {
   [
-    'variant', 'size', 'seat-a', 'seat-d', 'level-a', 'level-d', 'time',
+    'variant', 'size', 'seat-a', 'seat-d', 'level-a', 'level-d', 'time', 'nodes',
     'board', 'turn', 'counts', 'status', 'variant-name', 'message', 'history',
     'btn-new', 'btn-swap', 'btn-hint', 'btn-ai', 'btn-undo', 'btn-resign', 'btn-export',
     'btn-refresh', 'btn-games', 'btn-copy', 'games', 'rules-text', 'rules-title',
-    'meta-id', 'meta-ply', 'meta-moves', 'meta-ai', 'meta-seats', 'levels-note', 'version',
+    'meta-id', 'meta-ply', 'meta-moves', 'meta-ai', 'meta-seats', 'meta-budget', 'levels-note', 'version',
     'cmd-create', 'cmd-state', 'cmd-move', 'cmd-lobby', 'cmd-watch', 'cmd-index',
   ].forEach((id) => { elements[id] = $(id); });
 }
@@ -70,6 +70,7 @@ function settings() {
     seats: { attacker: elements['seat-a'].value, defender: elements['seat-d'].value },
     levels: { attacker: elements['level-a'].value, defender: elements['level-d'].value },
     time_ms: Number(elements.time.value),
+    max_nodes: Number(elements.nodes.value) || 0,
   };
 }
 
@@ -263,6 +264,21 @@ function guardedSeat(game) {
   return ['attacker', 'defender'].find((side) => game.players[side].guarded) || null;
 }
 
+/**
+ * What the next AI move of the side to move is allowed to cost: the clock budget,
+ * the ceiling in nodes, the ceiling in depth. This is the number behind the pause
+ * after "the AI answers in the same reply".
+ */
+function budgetLine(game) {
+  const budget = (game.budget || {})[game.turn] || null;
+  if (!budget) return '—';
+  const parts = [];
+  if (budget.time_ms) parts.push(`${budget.time_ms} ms`);
+  if (budget.max_nodes) parts.push(`${budget.max_nodes} nodes`);
+  if (budget.max_depth) parts.push(`depth ${budget.max_depth}`);
+  return `${game.turn}: ${parts.join(' + ') || 'the strength preset'}`;
+}
+
 function renderStatus() {
   const game = state.game;
   if (!game) return;
@@ -280,6 +296,7 @@ function renderStatus() {
   elements['meta-id'].textContent = game.id;
   elements['meta-seats'].textContent = seatsLine(game);
   elements['meta-ply'].textContent = `${game.ply} (${game.moves_played} in the record)`;
+  elements['meta-budget'].textContent = game.is_over ? '—' : budgetLine(game);
   elements['meta-moves'].textContent = `${game.legal_move_count}`;
   const ai = game.last_ai;
   elements['meta-ai'].textContent = ai
@@ -309,13 +326,15 @@ function renderCommands() {
   const spec = settings();
   const id = state.game ? state.game.id : '<id>';
   const legal = state.game && state.game.legal_moves.length ? state.game.legal_moves[0] : { from: 'd5', to: 'd4' };
-  const body = JSON.stringify({
+  const create = {
     variant: spec.variant,
     size: spec.size,
     seats: spec.seats,
     levels: spec.levels,
     time_ms: spec.time_ms,
-  });
+  };
+  if (spec.max_nodes) create.max_nodes = spec.max_nodes;
+  const body = JSON.stringify(create);
   elements['cmd-create'].value = `curl -s ${base}/api/games -X POST -H 'content-type: application/json' \\\n  -d '${body}'`;
   elements['cmd-state'].value = `curl -s ${base}/api/games/${id}`;
   const guarded = guardedSeat(state.game);

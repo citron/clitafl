@@ -17,6 +17,11 @@ const SEAT_KINDS = ['human', 'ai', 'agent', 'client', 'open'];
 // the token that plays it, and a seat with a token is played by its token alone.
 const SEAT_ALIASES = { agent: 'human', client: 'human', open: 'human' };
 const MAX_THINK_MS = 30000;
+// The ceilings a caller may put on one AI move. A node ceiling is the predictable
+// one: the search stops on a count and never reads the clock, so the same ceiling
+// costs the same on any machine, and a reply's worst case is a number the caller chose.
+const MAX_NODES = 5000000;
+const MAX_DEPTH = 40;
 const TOKEN_HEADER = 'x-clitafl-token';
 
 const now = () => new Date().toISOString();
@@ -43,6 +48,25 @@ function milliseconds(value, name) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 1) throw E.badRequest(`${name} expects a positive number of milliseconds, got '${value}'`);
   return Math.min(n, MAX_THINK_MS);
+}
+
+/**
+ * A node ceiling for one AI move: `0` leaves it to the clock, a number is a hard
+ * stop the search obeys without looking at the time at all.
+ */
+function nodeLimit(value, name) {
+  if (value === null || value === undefined) return 0;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) throw E.badRequest(`${name} expects a whole number of nodes, 0 for no ceiling, got '${value}'`);
+  return Math.min(n, MAX_NODES);
+}
+
+/** A depth ceiling for one AI move: `0` is the strength preset's own. */
+function depthLimit(value, name) {
+  if (value === null || value === undefined) return 0;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) throw E.badRequest(`${name} expects a whole number of plies to search, 0 for the level's own, got '${value}'`);
+  return Math.min(n, MAX_DEPTH);
 }
 
 function seatKind(value, name) {
@@ -110,6 +134,52 @@ function pairFrom(spec, read) {
   return out;
 }
 
+/** The per-seat spelling wins, then the global one, then the server's default. */
+function firstGiven(perSide, global, fallback) {
+  if (perSide !== undefined) return perSide;
+  if (global !== undefined) return global;
+  return fallback;
+}
+
+/**
+ * The ceilings of one AI move, per side, from the keys a caller sends: `time_ms` is the
+ * wall-clock budget, `max_nodes` a hard stop in work (0: the clock decides), `max_depth`
+ * a ceiling on the iterative deepening (0: the strength preset's own). Each has a
+ * `…_a` / `…_d` spelling for one seat.
+ */
+function budgetsFrom(spec, defaults = {}) {
+  const given = spec && typeof spec === 'object' ? spec : {};
+  const timeMs = {};
+  const maxNodes = {};
+  const maxDepth = {};
+  for (const side of [SIDE_ATTACKER, SIDE_DEFENDER]) {
+    const tag = side === SIDE_ATTACKER ? 'a' : 'd';
+    timeMs[side] = milliseconds(
+      firstGiven(given[`time_ms_${tag}`], given.time_ms ?? given.timeMs, defaults.timeMs),
+      `time_ms_${tag}`,
+    );
+    maxNodes[side] = nodeLimit(
+      firstGiven(given[`max_nodes_${tag}`], given.max_nodes ?? given.maxNodes, defaults.maxNodes),
+      `max_nodes_${tag}`,
+    );
+    maxDepth[side] = depthLimit(
+      firstGiven(given[`max_depth_${tag}`], given.max_depth ?? given.maxDepth, defaults.maxDepth),
+      `max_depth_${tag}`,
+    );
+  }
+  return { timeMs, maxNodes, maxDepth };
+}
+
+/** Did this body say anything at all about what an AI move may cost? */
+function hasBudgets(spec) {
+  const given = spec && typeof spec === 'object' ? spec : {};
+  const keys = ['timeMs', 'maxNodes', 'maxDepth'];
+  for (const key of ['time_ms', 'max_nodes', 'max_depth']) {
+    keys.push(key, `${key}_a`, `${key}_d`);
+  }
+  return keys.some((key) => given[key] !== undefined);
+}
+
 /** Per-side strength, validated against the presets the AI knows. `'hard'` sets both seats. */
 function levelsFrom(spec, fallback = null) {
   const given = typeof spec === 'string' ? { level: spec } : (spec || {});
@@ -141,6 +211,14 @@ class GameStore {
     this.ttlMs = wholeNumber(options.ttlMs ?? 3 * 60 * 60 * 1000, 'ttlMs');
     this.maxWatchers = wholeNumber(options.maxWatchers ?? 8, 'maxWatchers');
     this.defaultTimeMs = milliseconds(options.timeMs ?? null, 'timeMs');
+    this.defaultMaxNodes = nodeLimit(options.maxNodes ?? null, 'maxNodes');
+    this.defaultMaxDepth = depthLimit(options.maxDepth ?? null, 'maxDepth');
+    // What a game that says nothing about its AI's budget gets.
+    this.budgetDefaults = {
+      timeMs: this.defaultTimeMs,
+      maxNodes: this.defaultMaxNodes,
+      maxDepth: this.defaultMaxDepth,
+    };
     this.games = new Map();
     this.disk = options.stateDir ? new GameDirectory(options.stateDir) : null;
     if (this.disk) this.loadFromDisk();
@@ -151,7 +229,7 @@ class GameStore {
   /** The directory games are kept in, or `null` when they live in memory only. */
   get stateDir() { return this.disk ? this.disk.dir : null; }
 
-  /** Open a game. `spec`: variant, size, seats, levels, time_ms, seed, max_plies, load. */
+  /** Open a game. `spec`: variant, size, seats, levels, time_ms, max_nodes, max_depth, seed, max_plies, load. */
   create(spec = {}) {
     this.sweep();
     if (this.games.size >= this.maxGames) {
@@ -184,11 +262,7 @@ class GameStore {
     const open = { [SIDE_ATTACKER]: false, [SIDE_DEFENDER]: false };
     for (const side of openSides(spec.seats)) open[side] = true;
     const levels = levelsFrom(spec.levels, spec.level);
-    const globalTime = milliseconds(spec.time_ms ?? spec.timeMs ?? null, 'time_ms');
-    const timeMs = {
-      [SIDE_ATTACKER]: milliseconds(spec.time_ms_a ?? globalTime ?? this.defaultTimeMs, 'time_ms_a'),
-      [SIDE_DEFENDER]: milliseconds(spec.time_ms_d ?? globalTime ?? this.defaultTimeMs, 'time_ms_d'),
-    };
+    const { timeMs, maxNodes, maxDepth } = budgetsFrom(spec, this.budgetDefaults);
 
     const session = {
       id: newId(),
@@ -199,6 +273,8 @@ class GameStore {
       names: namesFrom(spec.names),
       levels,
       timeMs,
+      maxNodes,
+      maxDepth,
       seed,
       rngs: {
         [SIDE_ATTACKER]: seededRng(seed),
@@ -349,6 +425,8 @@ class GameStore {
       ? meta.seed
       : Math.floor(Math.random() * 1e9);
     const time = typeof meta.time_ms === 'object' && meta.time_ms ? meta.time_ms : {};
+    const nodes = typeof meta.max_nodes === 'object' && meta.max_nodes ? meta.max_nodes : {};
+    const depths = typeof meta.max_depth === 'object' && meta.max_depth ? meta.max_depth : {};
     const session = {
       id: entry.id,
       game,
@@ -361,6 +439,8 @@ class GameStore {
         [SIDE_ATTACKER]: milliseconds(time[SIDE_ATTACKER] ?? this.defaultTimeMs, 'time_ms_a'),
         [SIDE_DEFENDER]: milliseconds(time[SIDE_DEFENDER] ?? this.defaultTimeMs, 'time_ms_d'),
       },
+      maxNodes: pairFrom(nodes, (value) => nodeLimit(value, 'max_nodes')),
+      maxDepth: pairFrom(depths, (value) => depthLimit(value, 'max_depth')),
       seed,
       rngs: {
         [SIDE_ATTACKER]: seededRng(seed),
@@ -450,12 +530,17 @@ class GameStore {
     return this.games.size;
   }
 
-  /** The search player for one seat. */
+  /** The search player for one seat, with the ceilings that game carries. */
   aiFor(session, side, overrides = {}) {
     const level = overrides.level || session.levels[side];
     const timeMs = overrides.timeMs === undefined ? session.timeMs[side] : overrides.timeMs;
+    const maxNodes = overrides.maxNodes === undefined ? session.maxNodes[side] : overrides.maxNodes;
+    const maxDepth = overrides.maxDepth === undefined ? session.maxDepth[side] : overrides.maxDepth;
     return new AIPlayer(level, {
       timeMs: timeMs ?? undefined,
+      maxNodes: maxNodes || 0,
+      // A depth of 0 means the strength preset's own ceiling.
+      maxDepth: maxDepth || undefined,
       rng: overrides.unseeded ? Math.random : session.rngs[side],
       label: `${side} AI (${level})`,
     });
@@ -469,13 +554,24 @@ class GameStore {
   /**
    * One AI ply for the side to move. Returns the record of the ply, or `null` when
    * the game is over, the seat is not an AI, or the AI has no move (rule decided).
+   * `overrides` is a per-call budget: a caller asking for plies can put its own
+   * ceiling on them.
    */
-  playAiPly(session) {
+  playAiPly(session, overrides = {}) {
     const game = session.game;
     if (game.isGameOver() || session.seats[game.turn] !== 'ai') return null;
     const side = game.turn;
-    const { move, info } = this.suggest(session, side);
-    session.aiInfo = { side, level: session.levels[side], depth: info.depth, nodes: info.nodes, score: info.score };
+    const { move, info } = this.suggest(session, side, overrides);
+    session.aiInfo = {
+      side,
+      level: session.levels[side],
+      depth: info.depth,
+      nodes: info.nodes,
+      score: info.score,
+      time_ms: info.time_ms,
+      source: info.source,
+      max_nodes: overrides.maxNodes === undefined ? session.maxNodes[side] : overrides.maxNodes,
+    };
     if (!move) {
       game.declareNoMove(side);
       return null;
@@ -486,10 +582,10 @@ class GameStore {
   }
 
   /** Play while the side to move is an AI seat, so one request can cover a whole exchange. */
-  playAiSeats(session, maxPlies = 100) {
+  playAiSeats(session, maxPlies = 100, overrides = {}) {
     const played = [];
     while (played.length < maxPlies) {
-      const ply = this.playAiPly(session);
+      const ply = this.playAiPly(session, overrides);
       if (!ply) break;
       played.push(ply);
     }
@@ -516,7 +612,14 @@ module.exports = {
   TOKEN_HEADER,
   seatsFrom,
   levelsFrom,
+  budgetsFrom,
+  hasBudgets,
+  milliseconds,
+  nodeLimit,
+  depthLimit,
   other,
   newId,
   MAX_THINK_MS,
+  MAX_NODES,
+  MAX_DEPTH,
 };

@@ -8,8 +8,8 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-143 tests · 21 source files + 3 web files · ~5 200 lines of engine, AI, UI, CLI and server
-(~8 000 with the tests)
+150 tests · 22 source files + 3 web files · ~5 900 lines of engine, AI, UI, CLI and server
+(~9 100 with the tests)
 ```
 
 ## Why version 2 exists
@@ -110,6 +110,22 @@ post the game on, and a way to prove a seat.
 | a token leaking out of the API | it is shown once, in the join reply, never in a state view, and a seat handed to the AI, or back to an anonymous caller, gives it up |
 | a restart forgetting who was in the game | the save file keeps the token, the name and the open flags, so the second server guards the seats exactly as the first one did |
 
+## Why version 2.6 exists
+
+A `grandmaster` reply was as strong as the machine running it: a `time_ms` budget is a wall
+clock, so the same request answered deeper on a fast server, shallower on a loaded one, and
+a client had no number to plan around. The roadmap asked for a predictable ceiling.
+
+| need | now |
+| --- | --- |
+| a move whose cost is the speed of the CPU | `max_nodes`: the search stops on a count of nodes and never reads the clock, so a ceiling is the same work on any machine and a match played under it replays move for move |
+| one number for both seats is too coarse | `max_nodes` / `max_depth` / `time_ms` per game, each with an `…_a` / `…_d` spelling for one seat, and the same keys on a `/ai` or `/hint` call, for one deeper look |
+| a client cannot know the worst case of a reply | the state answers `budget: {attacker: {time_ms, max_nodes, max_depth}, defender: …}`, and the API index describes the keys, the caps (`30 s`, `5 000 000` nodes, depth `40`) and which ceiling is the predictable one |
+| a move that cannot be explained afterwards | `last_ai` carries the time it cost, whether the move came from the book or the search, and the node ceiling it obeyed |
+| the same ceiling wanted on the terminal | `--nodes <n>` and `--depth <n>` on `play`, `demo`, `match` and `serve`, printed back in the thinking line and the `serve` banner |
+| a seat that outlives its ceiling | the ceilings ride in the save file, so a restarted server plays a game with the budget it was given, and `POST /seats` replaces the set it is handed |
+| a ceiling the search ignores | a depth ceiling is the last word on how deep the iterative deepening goes, so a cheap move stays inside the node ceiling it was given |
+
 ## Design decisions
 
 - **Data, not code, for the rules.** A variant is a row in `src/rules/variants.js`:
@@ -146,6 +162,11 @@ post the game on, and a way to prove a seat.
   the plain caller seat it always was — the documented one-`curl`-per-move flow needs no
   credential — and only a join makes a seat private. One way in, one way to prove you are in,
   and the seat that is open to the lobby is open to everybody who can reach the port.
+- **A move's cost is a number, on every door.** `max_nodes`, `max_depth` and `time_ms`, per
+  seat, mean the same thing on a game, on a `/ai` call, on a `/hint`, on the CLI and in the
+  store: `budgetsFrom` in `src/net/store.js` is the one place the spellings are read. The
+  node ceiling is the predictable one — the search stops on a count and never reads the clock
+  — so a client can bound what a reply costs before it sends the request.
 - **A suggestion is not a rule.** A book move is checked against the legal moves, a missing
   book is not an error, and the client renders exactly what the API sends.
 - **Claims are checked by tests.** The historical armies, the king-capture counts, the
@@ -193,20 +214,20 @@ tests/         board · game · notation · ai · display · headless · cli · 
   book for the strong levels, four levels, seeded, and a node budget for reproducible
   matches; plays out every variant headlessly.
 - CLI: `play`, `demo`, `match`, `serve`, `variants`, `rules`, `help`; flags for seats,
-  strength, budget, size, seeds, scripts, saves, records, host, port, game slots, watchers
-  per game, state directory, TTL, plain-ASCII and colour-off.
-- Web: a board page served by the same process — click-to-move, seat pickers, record,
-  hint, AI moves, undo, resign, save, an agent panel with the `curl` of the current game,
-  and a stream it watches so a move played elsewhere lands on the board by itself.
+  strength, budget (clock, nodes, depth), size, seeds, scripts, saves, records, host, port,
+  game slots, watchers per game, state directory, TTL, plain-ASCII and colour-off.
+- Web: a board page served by the same process — click-to-move, seat, level and search-ceiling
+  pickers, record, hint, AI moves, undo, resign, save, an agent panel with the `curl` of the
+  current game, and a stream it watches so a move played elsewhere lands on the board by itself.
 - API: 21 JSON endpoints, self-describing, CORS open, a session store with slots, TTL,
   watchers and an optional state directory, a lobby where an open seat goes to the first
   client that takes it — with the token that plays it —, a Server-Sent Events stream per
-  game, save-file round-trips, one message per error.
-- Tests: 143, all green, `npm test`, no dependencies.
+  game, per-seat AI budgets (clock, nodes, depth) answered in the state, save-file
+  round-trips, one message per error.
+- Tests: 150, all green, `npm test`, no dependencies.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.
 
 ## Roadmap
 
-- Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.
 - `ard-ri` has 7×7 armies, and 7×7 boards only carry 8 attackers in the symmetric
   generator: its setup stays a documented reconstruction.

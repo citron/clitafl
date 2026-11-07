@@ -103,6 +103,15 @@
           <option value="5000">5 s — patient</option>
         </select>
       </label>
+      <label class="field">
+        <span>search ceiling per AI move</span>
+        <select id="nodes">
+          <option value="0" selected>none — the thinking time decides</option>
+          <option value="20000">20 000 nodes — quick, and the same cost on any machine</option>
+          <option value="200000">200 000 nodes</option>
+          <option value="1000000">1 000 000 nodes — patient</option>
+        </select>
+      </label>
       <div class="actions">
         <button type="button" id="btn-new" class="primary">new game</button>
         <button type="button" id="btn-swap" title="swap the seats">swap seats</button>
@@ -117,6 +126,7 @@
         <dt>seats</dt><dd id="meta-seats">—</dd>
         <dt>ply</dt><dd id="meta-ply">0</dd>
         <dt>legal moves</dt><dd id="meta-moves">0</dd>
+        <dt>AI budget</dt><dd id="meta-budget">—</dd>
         <dt>AI last move</dt><dd id="meta-ai">—</dd>
       </dl>
       <p class="hint-text">a seat marked <code>agent / client</code> is played from outside the browser: the

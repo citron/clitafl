@@ -25,7 +25,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 143 tests, node's built-in runner, no download needed
+npm test        # 150 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -62,17 +62,23 @@ node src/index.js help
 ```
 
 Useful flags: `--size 11`, `--human attacker|defender|both|none`, `--level easy|medium|hard|grandmaster`,
-`--level-a` / `--level-d` per side, `--time <ms>` thinking budget, `--moves <file>` for a
+`--level-a` / `--level-d` per side, `--time <ms>` thinking budget, `--nodes <n>` ceiling in
+search nodes, `--depth <n>` ceiling on the search depth, `--moves <file>` for a
 scripted game, `--load <file>` to resume, `--record <file>` to write the record,
 `--seed <n>` for reproducible matches, `--max-plies <n>`, `--fps <ms>`,
 `--ascii`, `--no-color` (also honours `NO_COLOR`), `--no-animation`.
+
+`--time` is a wall clock, so what a move costs depends on the machine. `--nodes` is the
+budget that does not: the search stops on a count of nodes and never reads the clock, so the
+same ceiling buys the same work on any server, at any hour, and a match played under it
+replays move for move. `--depth` is the cheap knob that keeps a move inside a node ceiling.
 
 For `serve`: `--port <n>` (0 asks the operating system for a free one), `--host <addr>`
 (default `127.0.0.1`), `--max-games <n>` (default 50), `--max-watchers <n>` — connections
 that may watch one game as it is played (default 8), `--ttl <minutes>` — how long a game
 nobody touches is kept (default 180), `--state-dir <dir>` — keep the open games there and
-find them again after a restart, `--time <ms>` — the default thinking budget. Ctrl-c
-closes the server and exits 0.
+find them again after a restart, `--time <ms>`, `--nodes <n>`, `--depth <n>` — the default
+budget of an AI move. Ctrl-c closes the server and exits 0.
 
 ## Web board and API
 
@@ -93,14 +99,18 @@ clitafl is serving
 
   open games 50 at a time, forgotten after 180 minutes without a request
   watchers   8 connections may watch one game as it is played
+  ceiling    200000 search nodes per AI move (the budget that costs the same on any machine)
 ```
 
-The board in `web/` is one page: variant, size, seat and level pickers, a click-to-move
-board with the castle / throne / escape marks, the record, and hint, AI moves, undo,
-resign, save and refresh. A seat set to *agent / client* is left to the outside world: the
-page shows the exact `curl` commands that drive it, which is how a script or an AI agent
-takes a seat over. The page also *watches* the game it shows, so a move played from a
-terminal appears in the browser without a click.
+With no `--nodes`, the banner leaves the ceiling line out and the clock decides each move.
+
+The board in `web/` is one page: variant, size, seat, level and search-ceiling pickers, a
+click-to-move board with the castle / throne / escape marks, the record, and hint, AI moves,
+undo, resign, save and refresh. The meta panel answers what the next AI move is allowed to
+cost, so the pause after a move has a number attached to it. A seat set to *agent / client*
+is left to the outside world: the page shows the exact `curl` commands that drive it, which
+is how a script or an AI agent takes a seat over. The page also *watches* the game it shows,
+so a move played from a terminal appears in the browser without a click.
 
 The API is the same game the CLI and the page play. `GET /api` describes it as data, so a
 client can discover it without reading this file.
@@ -140,8 +150,8 @@ curl -sN localhost:8080/api/games/<id>/events
 | `POST /api/lobby/:id/join` | take an open seat `{seat, name}`: the reply carries its token |
 | `GET /api/games/:id?moves=turn\|none\|all` | full state: board, turn, legal moves, record |
 | `POST /api/games/:id/moves` | play `{from,to}` (or `{move:"d5-d6"}`), `?ai=false` silences the AI seats |
-| `POST /api/games/:id/ai` | let the AI seats play `{moves:n}` plies, or `{moves:"all"}` |
-| `POST /api/games/:id/hint` | search a move without playing it |
+| `POST /api/games/:id/ai` | let the AI seats play `{moves:n}` plies, `{moves:"all"}`, with a per-call `{time_ms, max_nodes, max_depth}` |
+| `POST /api/games/:id/hint` | search a move without playing it, at any budget: `{side, level, time_ms, max_nodes, max_depth}` |
 | `POST /api/games/:id/undo` · `/resign` · `/seats` | take plies back, resign, hand a seat to the AI, the lobby or an agent |
 | `GET /api/games/:id/moves?since=n` · `/rules` · `/export` | the record, the rules, the save file |
 | `GET /api/games/:id/events` | the game as a Server-Sent Events stream (`text/event-stream`) |
@@ -167,7 +177,12 @@ Notes for a client:
 - `legal_moves` is the list for the side to move, an array. `?moves=all` makes it an object
   keyed by side, `?moves=none` makes it empty.
 - `time_ms` (and `time_ms_a` / `time_ms_d`) is capped at 30 s, because the search runs
-  inside the request.
+  inside the request. `max_nodes` is the ceiling that does not depend on the machine: the
+  search stops on a count of nodes and never reads the clock, so the same ceiling costs the
+  same work on any server and a replayed match plays the same moves. A game answers the
+  budget of each side as `budget: {attacker, defender}`, a reply plays every AI seat in
+  turn so its worst case is the sum of theirs, and `last_ai` names the node ceiling the
+  move obeyed, with the time and the source — `book` or `search` — it cost.
 - Bad input is a `400` with one readable sentence, a seat you do not hold is a `401`, a game
   that is over is a `409`, a route that does not exist is a `404` with a hint, and CORS is
   open (`OPTIONS` → 204).
@@ -244,8 +259,12 @@ and how much play is allowed to wander:
 
 What that budget reaches from the opening, with the book off: `tablut` depth 4 (medium) to
 5 (grandmaster), `copenhagen` 3 to 4, `brandub` 5 to 7, `alea` 2 to 3 — 30 000 to
-90 000 nodes a second depending on the board. The quiescence search follows the moves that
-take a piece, so a snapshot evaluation never counts in the middle of an exchange.
+90 000 nodes a second depending on the board. The same opening under a node ceiling —
+200 000 nodes, book off — is depth 5 on `brandub` (0.5 s), 4 on `tablut` (0.8 s), 3 on
+`copenhagen` (2.4 s), 3 on `alea` (1.7 s): the ceiling buys the depth, the seconds are what
+this machine spends on it, and the depth is the same on any machine. The quiescence search
+follows the moves that take a piece, so a snapshot evaluation never counts in the middle of
+an exchange.
 
 The evaluation is tafl-specific: material, king mobility, the distance of the king to its
 escape squares (including the marked 2×2 blocks), open lines to the escape, freedom of both
@@ -258,8 +277,14 @@ move is only a suggestion — it is checked against the legal moves before it is
 `book: false` (or `bookData`) turns it off.
 
 A node budget (`maxNodes`) makes a search bit-reproducible: it stops on a count and never
-reads the clock. That is what a seeded `match` and the test suite run on; with a clock
-budget, the depth reached depends on the machine.
+reads the clock — the count is checked every 1 024 nodes, and the answer is the last deepening
+pass that finished, so a move never depends on where the count cut a pass. That is what a seeded
+`match` and the test suite run on; with a clock
+budget, the depth reached depends on the machine. Both ceilings are the caller's, on every
+door: `--nodes` / `--depth` on the CLI, `max_nodes` / `max_depth` — with an `…_a` / `…_d`
+spelling per seat — on a game, and on a `/ai` or `/hint` call that wants a deeper look than
+the game's own ceiling. The state answers the budget of each side, so the worst case of a
+reply is a number the client chose; see the API notes.
 
 ## Headless
 
@@ -317,16 +342,18 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-143 tests on `node:test` — no framework to install. They cover the historical armies and
+150 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
 king capture, the marked squares capturing for both sides), movement, capture counts (open
 field, beside and on a castle, edge), siege sealing, apply/undo symmetry, save round-trips,
 repetition and ply-limit draws, the search (mate in one, escapes, time budget, depth
-monotonicity, capture prediction against the board for every legal move, quiescence
+monotonicity, the depth and node ceilings answering the number they were given, capture
+prediction against the board for every legal move, quiescence
 following only captures, the Zobrist key over a 40-ply game, a node budget replaying
 itself, book moves being legal), the renderer (glyphs, colour off, legend counts, rules
 text, animation never touching the real board), the CLI itself (flags, exit codes,
-records, scripted games), the API (every endpoint, every error path, seats, clocks, TTL,
+records, scripted games, a `--nodes` match replaying itself), the API (every endpoint, every error path, seats, clocks, per-seat
+budgets obeyed past the opening book, TTL,
 save round-trips, the watchers of a game hearing every change, games written to and read
 back from a state directory), and the HTTP layer over a real socket (static files,
 traversal attempts, CORS, body cap, the event stream frame by frame, a state directory

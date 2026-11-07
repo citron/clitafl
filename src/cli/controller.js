@@ -26,6 +26,8 @@ class GameController {
     this.seats = options.seats || { [SIDE_ATTACKER]: 'ai', [SIDE_DEFENDER]: 'human' };
     this.levels = options.levels || { [SIDE_ATTACKER]: 'medium', [SIDE_DEFENDER]: 'medium' };
     this.timeMs = options.timeMs ?? null;
+    this.maxNodes = options.maxNodes ?? null;
+    this.maxDepth = options.maxDepth ?? null;
     this.recordPath = options.record || null;
     this.script = null;
     this.scriptIndex = 0;
@@ -116,13 +118,24 @@ class GameController {
   makeAi(side) {
     return new AIPlayer(this.levels[side], {
       timeMs: this.timeMs ?? undefined,
+      maxNodes: this.maxNodes ?? 0,
+      maxDepth: this.maxDepth ?? undefined,
       label: `${this.sideLabel(side)} AI`,
     });
   }
 
+  /** What one AI move is allowed to spend, in the words of the thinking line. */
+  budgetNote() {
+    const parts = [];
+    if (this.timeMs) parts.push(`${this.timeMs} ms`);
+    if (this.maxNodes) parts.push(`${this.maxNodes} nodes`);
+    if (this.maxDepth) parts.push(`depth ${this.maxDepth}`);
+    return parts.length ? ` (budget ${parts.join(', ')})` : '';
+  }
+
   async playAiMove(side) {
     const ai = this.makeAi(side);
-    this.ansi.write(`\n${this.sideLabel(side)} AI (${this.levels[side]}) is thinking...\n`);
+    this.ansi.write(`\n${this.sideLabel(side)} AI (${this.levels[side]}) is thinking...${this.budgetNote()}\n`);
     const started = Date.now();
     const { move, info } = ai.chooseMove(this.game, side);
     if (!move) {

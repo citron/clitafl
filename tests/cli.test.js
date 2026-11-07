@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync, spawn } = require('node:child_process');
 
-const { parseCli, seatsFrom, usage, COMMANDS } = require('../src/index');
+const { parseCli, seatsFrom, numbersFrom, usage, COMMANDS } = require('../src/index');
 const { Game } = require('../src/rules/game');
 const { VARIANT_IDS } = require('../src/rules/variants');
 const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../src/rules/pieces');
@@ -134,6 +134,9 @@ test('a bad flag value is a one-line error, not a stack trace', () => {
   const cases = [
     ['rules', 'tablut', '--size', '12'],
     ['match', '--time', 'abc'],
+    ['match', '--nodes', 'castle'],
+    ['match', '--nodes', '1.5'],
+    ['match', '--depth', '2.5'],
     ['match', '--variant', 'tablu'],
     ['play', '--level', 'genius', '--moves', '/dev/null', '--no-color'],
     ['play', '--human', 'knight', '--moves', '/dev/null', '--no-color'],
@@ -146,6 +149,25 @@ test('a bad flag value is a one-line error, not a stack trace', () => {
   }
 });
 
+test('the ceiling flags become what the AI obeys', () => {
+  // A node ceiling is the whole number the player typed: the search counts nodes, so
+  // the same flag costs the same work on any machine, at any hour.
+  assert.deepEqual(numbersFrom({ nodes: '20000', depth: '8' }), {
+    size: null,
+    timeMs: null,
+    maxNodes: 20000,
+    maxDepth: 8,
+    seed: null,
+    fps: null,
+    maxPlies: null,
+  });
+  assert.equal(numbersFrom({}).maxNodes, null, 'unset: the thinking time decides');
+  assert.equal(numbersFrom({}).maxDepth, null, 'unset: the strength preset has the last word on depth');
+  // `help` tells the player these flags exist, in the same breath as `--time`.
+  assert.match(usage(), /--nodes <n>/);
+  assert.match(usage(), /--depth <n>/);
+});
+
 test('`match` plays a whole game and prints the record', () => {
   const { code, out } = run([
     'match', '--variant', 'brandub', '--level', 'easy',
@@ -155,6 +177,20 @@ test('`match` plays a whole game and prints the record', () => {
   assert.match(out, /^\s*1\. A [a-g][1-7]-[a-g][1-7]$/m, 'the record starts at ply 1');
   assert.match(out, /plies, \d+ captures\)/, 'and closes with a summary line');
   assert.match(out, /(DEFENDERS-WIN|ATTACKERS-WIN|DRAW)/);
+});
+
+test('`match --nodes` gives a record that survives a move to another machine', () => {
+  // The node ceiling is the number the player chose, not the speed of the CPU: the
+  // search stops on a count and never looks at the clock, so two runs agree.
+  const args = [
+    'match', '--variant', 'tablut', '--level', 'hard',
+    '--nodes', '3000', '--seed', '3', '--max-plies', '30', '--no-color',
+  ];
+  const one = run(args);
+  const two = run(args);
+  assert.equal(one.code, 0);
+  assert.equal(one.out, two.out, 'the same ceiling plays the same record twice');
+  assert.match(one.out, /(DEFENDERS-WIN|ATTACKERS-WIN|DRAW)/, 'and the match is played out');
 });
 
 test('`match --record` writes a save file that loads back', () => {

@@ -50,7 +50,9 @@
 
 ## `src/cli/`
 
-- **controller.js** — one session: seats (human or AI per side), the turn loop, in-game
+- **controller.js** — one session: seats (human or AI per side), the turn loop, the
+  `--nodes` / `--depth` / `--time` ceilings a move is played under (named in the thinking
+  line), in-game
   commands (`help`, `board`, `moves`, `history`, `hint`, `undo`, `rules`, `save`,
   `resign`, `quit`), scripted games from `--moves`, records from `--record`, signal
   handlers that always restore the terminal.
@@ -61,13 +63,18 @@
   with an `allow` list, `409`, `413`): a failure is one readable sentence, never a stack
   trace.
 - **state.js** — the public JSON view of a session: `gameView` (turn, seats, levels,
-  clocks, counts, last move, record), `playersView` (who holds a seat: its kind, the name
+  clocks, budget, counts, last move, record), `budgetView` (what the next AI move of each
+  side may cost: clock, node ceiling, depth ceiling), `playersView` (who holds a seat: its
+  kind, the name
   the lobby gave it, whether a token guards it, whether it is still open), `openSeatsView`,
   `boardView` (rows, castles, throne, escapes), `variantView`, `plyView`, `levelsView`, and
   `rulesText` — the CLI renderer with the colours off. A view never carries a token.
 - **store.js** — the open games: ids, seats (`human | ai | agent | client | open`, the
-  aliases folding onto the caller's seat), levels and per-seat clocks,
-  `playAiPly`/`playAiSeats`, touch/TTL sweep, `maxGames` cap, seed and ply-limit overrides,
+  aliases folding onto the caller's seat), levels and the budget of an AI move — clock, node
+  ceiling, depth ceiling, each per seat (`budgetsFrom` is the one place those keys are
+  read, `hasBudgets` says whether a body said anything about them; the clock is capped at
+  30 s, the nodes at 5 000 000, the depth at 40),
+  `playAiPly`/`playAiSeats` — which take the per-call ceilings of a request —, touch/TTL sweep, `maxGames` cap, seed and ply-limit overrides,
   resume from a save file. Seats and tokens: `applySeats` hands a seat to the AI, the lobby
   or the caller (a seat the AI takes, or one handed back anonymously, gives its token up),
   `joinSeat` takes an open seat and mints the one token of this server, `requireSeat` says
@@ -83,14 +90,19 @@
   the directory, then a rename), `remove` takes the file with the game, `loadAll` reads
   every file back, most recent first, skipping what is not a game. The file is the
   `clitafl-save-v1` save plus a `session` key — seats, names, tokens, open seats, levels,
-  clocks, seed, dates — so the same file loads through `POST /api/games {"load": …}` and
-  `--load` unchanged, and a restart guards the seats as the first server did.
+  clocks, ceilings, seed, dates — so the same file loads through `POST /api/games {"load": …}` and
+  `--load` unchanged, and a restart guards the seats, and obeys the ceilings, as the first
+  server did.
 - **api.js** — the route table (21 endpoints) and the handlers. `GET /api` describes every
-  endpoint as data, so a client can discover the game without reading a manual. The lobby is
+  endpoint as data, so a client can discover the game without reading a manual, with the
+  seat kinds, the token header and the budget keys — which ceiling is the predictable one,
+  and the caps. The lobby is
   here: `GET /api/lobby`, `GET /api/lobby/:id`, `POST /api/lobby/:id/join` — the join is the
   only reply that shows a token. The seat guards read the `x-clitafl-token` header: a move
   and a resignation for the seat it holds, `undo` and `seats` for the game it plays in, a
-  `hint` for nobody in particular. One `announce` helper is where a change is pushed — a
+  `hint` for nobody in particular. `budgetOverrides` is what a `/ai` or a `/hint` call pays
+  with — one deeper look, for one request — and `POST /seats` replaces the set it is handed.
+  One `announce` helper is where a change is pushed — a
   `ply` event per move, then the `state` — and where a game is marked as worth writing to
   the state directory.
 - **server.js** — `node:http`: `/api/*` to the API (with `req.headers`, which is how a seat
@@ -103,10 +115,12 @@
 
 ## Top level
 
-- **headless.js** — `playMatch` (AI vs AI, no terminal, seeded RNG), `formatMatch`, used by
+- **headless.js** — `playMatch` (AI vs AI, no terminal, seeded RNG, `maxNodes` / `maxDepth`
+  budgets that make a match replay move for move), `formatMatch`, used by
   `demo`, `match` and the tests.
 - **index.js** — the command line: `play`, `demo`, `match`, `serve`, `variants`, `rules`,
-  `help`, the flag table, exit codes 0/1/2.
+  `help`, the flag table (`--time`, `--nodes`, `--depth` for the budget of an AI move),
+  exit codes 0/1/2.
 
 ## `tools/`
 
@@ -116,8 +130,10 @@
 
 ## `web/` — the browser client (no build step)
 
-- **index.html** — board panel, setup card (variant, size, seat, level, thinking time),
-  this-game card (id, who holds each seat, ply, legal moves, what the AI last did), the
+- **index.html** — board panel, setup card (variant, size, seat, level, thinking time,
+  search ceiling),
+  this-game card (id, who holds each seat, ply, legal moves, what the next AI move may
+  cost, what the AI last did), the
   agent card with the `curl` commands of the current game — open, read, move, the lobby,
   the one that watches it — the rules, the list of open games.
 - **style.css** — the theme: a wooden board, round pieces, castle/throne/escape marks,
@@ -126,7 +142,9 @@
   squares into moves from `legal_moves`, and never invents a rule of its own. It also
   opens an `EventSource` on the game it shows, so a move played from a terminal, a script
   or another tab lands on the board by itself, and says so when the game is closed. The
-  move `curl` it prints carries `x-clitafl-token` when the game has a seat a token guards.
+  move `curl` it prints carries `x-clitafl-token` when the game has a seat a token guards,
+  the meta panel answers the budget of the next AI move (clock, node ceiling, depth
+  ceiling), and the opening `curl` carries the search ceiling picked in the setup card.
 
 ## `tests/` — `node:test`, run with `npm test`
 
@@ -139,29 +157,35 @@
 - **game.test.js** — 14 tests: first mover, escapes, king capture, illegal moves, the
   siege, no-legal-move rules, repetition, ply limit, undo, save round-trips.
 - **notation.test.js** — 6 tests: squares, every spelling of a move, large boards, errors.
-- **ai.test.js** — 15 tests: level presets, mate in one, taking the escape, legality in
+- **ai.test.js** — 16 tests: level presets, mate in one, taking the escape, legality in
   every variant, time budget, depth monotonicity, seeded reproducibility, the capture
   prediction matching the board for every legal move, quiescence following only the moves
   that take a piece, the Zobrist key tracking a 40-ply game, a node budget giving the same
-  move and score with the table keeping what it learned, and the opening book offering
-  legal prepared openings.
+  move and score with the table keeping what it learned, a depth ceiling answering its
+  ceiling and costing what it asks for, and the opening book offering legal prepared
+  openings.
 - **display.test.js** — 13 tests: the board frame, file letters aligned on their column at
   every size, glyphs, `--ascii`, colour on/off, legend counts, status, outcome, banner,
   animation safety, the command list, and the rules text of tablut and of alea evangelii.
-- **headless.test.js** — 8 tests: seeded RNG, full games per variant, record shape,
-  determinism on a node budget, mixed strengths, custom sizes, progress.
-- **cli.test.js** — 17 tests: flag parsing, seats, per-side levels, help text, and the real
-  commands run in a child process (`variants`, `rules` for copenhagen, brandub and alea,
-  `--version`, bad command, `match`, `--record`, scripted games, `--load`, `serve` flag
-  checks — port, TTL, `--max-watchers`, a `--state-dir` that cannot be made — and its
+- **headless.test.js** — 9 tests: seeded RNG, full games per variant, record shape,
+  determinism on a node budget, mixed strengths, a depth ceiling keeping a grandmaster ply
+  inside the node ceiling, custom sizes, progress.
+- **cli.test.js** — 19 tests: flag parsing, seats, per-side levels, the ceiling flags
+  (`--nodes`, `--depth`) and the record they make reproducible across runs, help text, and
+  the real commands run in a child process (`variants`, `rules` for copenhagen, brandub and
+  alea, `--version`, bad command, `match`, `--record`, scripted games, `--load`, `serve`
+  flag checks — port, TTL, `--max-watchers`, a `--state-dir` that cannot be made — and its
   banner).
-- **net.test.js** — 32 tests: the API as a function — the endpoint index, the catalogues
+- **net.test.js** — 35 tests: the API as a function — the endpoint index, the catalogues
   (including a 19×19 alea evangelii game with its 16 exits and citadel), opening a game,
   the move view (`from,to,piece,san`, the king named as such), `moves=turn|none|all`, an
   exchange with the AI answering, every way to send a move, every bad input, refusals
   (`409`), the AI seat playing n plies or all, hints, undo, resign, seats, the record, the
   rules text, the save round-trip, the game list, `max_games`, the TTL, unknown routes and
-  verbs, the push watchers (a `ply` per move and the state after it, a seat change pushing
+  verbs, the budgets of an AI move (the state answering them per seat, the caps, a seat
+  change replacing the set, a `/ai` and a `/hint` call obeying the ceiling it was given
+  past the opening book, and the ceilings coming back off the state directory), the push
+  watchers (a `ply` per move and the state after it, a seat change pushing
   and a hint not, the close on delete and on the TTL sweep, the watcher cap, and a sink
   whose socket is gone being dropped), the state directory: a game written as a save
   file at once and after every move, read back by a second store with its seats, levels,

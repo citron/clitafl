@@ -26,6 +26,8 @@ function saveFile(session) {
     seats: session.seats,
     levels: session.levels,
     time_ms: session.timeMs,
+    max_nodes: session.maxNodes,
+    max_depth: session.maxDepth,
     seed: session.seed,
     tokens: session.tokens || null,
     names: session.names || null,

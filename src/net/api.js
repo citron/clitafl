@@ -6,11 +6,13 @@ const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../rules/pieces');
 const { parseMove, formatSquare, formatSan } = require('../rules/notation');
 const S = require('./state');
 const E = require('./errors');
-const { levelsFrom, SEAT_KINDS, TOKEN_HEADER } = require('./store');
+const {
+  levelsFrom, SEAT_KINDS, TOKEN_HEADER, budgetsFrom, hasBudgets, milliseconds, nodeLimit, depthLimit,
+  MAX_THINK_MS, MAX_NODES, MAX_DEPTH,
+} = require('./store');
 
 const MOVE_OPTIONS = ['turn', 'none', 'all'];
 const SIDES = [SIDE_ATTACKER, SIDE_DEFENDER];
-const MAX_THINK_MS = 30000;
 
 function apiIndex(store, version) {
   return {
@@ -27,17 +29,17 @@ function apiIndex(store, version) {
       { method: 'GET', path: '/api/variants/:id?size=11', about: 'one variant, with its rules as text' },
       { method: 'GET', path: '/api/levels', about: 'the AI strength presets' },
       { method: 'GET', path: '/api/games', about: 'the open games; ?include=closed also lists finished ones' },
-      { method: 'POST', path: '/api/games', about: 'open a game: variant, size, seats, levels, time_ms, seed, max_plies, load, names' },
+      { method: 'POST', path: '/api/games', about: 'open a game: variant, size, seats, levels, time_ms, max_nodes, max_depth, seed, max_plies, load, names' },
       { method: 'GET', path: '/api/lobby', about: 'the games with a seat going: join one and get its token' },
       { method: 'GET', path: '/api/lobby/:id', about: 'one lobby card: who is in the game, which seats are open' },
       { method: 'POST', path: '/api/lobby/:id/join', about: 'take an open seat: {seat, name} answers with the seat token' },
       { method: 'GET', path: '/api/games/:id?moves=turn|none|all', about: 'full state: board, turn, legal moves, history' },
       { method: 'POST', path: '/api/games/:id/moves', about: 'play {from,to} as the seat the caller controls' },
-      { method: 'POST', path: '/api/games/:id/ai', about: 'let the AI seats play: {moves:n} plies, {moves:"all"} while an AI seat is to move' },
-      { method: 'POST', path: '/api/games/:id/hint', about: 'search a move without playing it: {side, level, time_ms}' },
+      { method: 'POST', path: '/api/games/:id/ai', about: 'let the AI seats play: {moves:n} plies, {moves:"all"} while an AI seat is to move, and a per-call {time_ms, max_nodes, max_depth}' },
+      { method: 'POST', path: '/api/games/:id/hint', about: 'search a move without playing it: {side, level, time_ms, max_nodes, max_depth}' },
       { method: 'POST', path: '/api/games/:id/undo', about: 'take back {plies:n} plies (a seat token of this game authorises it)' },
       { method: 'POST', path: '/api/games/:id/resign', about: 'resign for {side}' },
-      { method: 'POST', path: '/api/games/:id/seats', about: 'hand a seat to the AI, the lobby or an agent: {seats, names, levels, time_ms}' },
+      { method: 'POST', path: '/api/games/:id/seats', about: 'hand a seat to the AI, the lobby or an agent: {seats, names, levels, time_ms, max_nodes, max_depth}' },
       { method: 'GET', path: '/api/games/:id/moves?since=ply', about: 'the record, from ply `since` on' },
       { method: 'GET', path: '/api/games/:id/rules', about: 'the rules of the variant being played' },
       { method: 'GET', path: '/api/games/:id/export', about: 'the save file of the game; POST it back as {load: ...} to resume' },
@@ -49,6 +51,12 @@ function apiIndex(store, version) {
       about: 'who controls a side: `ai` is played by the server search; `human`, `agent` and `client` by the caller; `open` is a caller seat nobody has taken yet',
       tokens: `a seat the lobby sold has a token, and only its token plays it: send it as the ${TOKEN_HEADER} header (401 without it). GET /api/lobby lists the games with a seat going, POST /api/lobby/:id/join hands out the token`,
     },
+    budget: {
+      keys: ['time_ms', 'max_nodes', 'max_depth'],
+      about: `what one AI move may cost, per seat as time_ms_a / max_nodes_a / max_depth_a: time_ms is the clock budget (capped at ${MAX_THINK_MS / 1000} s), max_nodes a hard stop in nodes (0: the clock decides, capped at ${MAX_NODES}), max_depth a ceiling on how deep the search goes (0: the strength preset's own, capped at ${MAX_DEPTH})`,
+      ceiling: 'the state answers the budget of each side as budget: {attacker, defender}; a reply plays every AI seat in turn, so its worst case is the sum of theirs',
+      predictable: 'max_nodes is the ceiling that holds across machines: the search stops on a count of nodes and never reads the clock, so the same ceiling costs the same work on any server, and a replayed match plays the same moves',
+    },
     notes: [
       'the game is public information: legal_moves lists every move of the side to move',
       'a move is {from,to,piece,san}: piece is king | defender | attacker, san is what you post back',
@@ -59,6 +67,7 @@ function apiIndex(store, version) {
       'games live in memory, and in a directory when the server runs with --state-dir: a restart finds them again, GET /api/health says where',
       'a lobby: open a game with {"seats":{"defender":"open"}}, GET /api/lobby lists it, and POST /api/lobby/:id/join {"seat":"defender","name":"bot-7"} hands out the token that plays it',
       'the search is synchronous: a long time_ms blocks that one request, and is capped at 30 s',
+      'the last AI move is reported as last_ai: depth, nodes, score, time_ms, source (book or search), and the node ceiling it obeyed',
       'a failure is one readable sentence: {"error": "...", "status": n}, with 400, 401, 404, 405, 409, 413',
     ],
     games_open: store.size,
@@ -89,10 +98,26 @@ function readMoveInput(body, size) {
   }
 }
 
-function readTimeMs(value, name) {
-  const ms = Number(value);
-  if (!Number.isFinite(ms) || ms < 1) throw E.badRequest(`${name} expects a positive number of milliseconds, got '${value}'`);
-  return Math.min(ms, MAX_THINK_MS);
+/**
+ * The ceilings of one call that asks the engine to think: a hint, or a request that
+ * plays the AI seats. Every key is the same spelling the game itself carries, so a
+ * caller who knows one knows the other. A `max_nodes` ceiling is the predictable one:
+ * the search stops on a count of nodes, on any machine, at any hour.
+ */
+function budgetOverrides(body) {
+  const out = {};
+  if (body.level) {
+    try {
+      levelOf(body.level);
+    } catch (error) {
+      throw E.badRequest(error.message);
+    }
+    out.level = String(body.level).toLowerCase();
+  }
+  if (body.time_ms !== undefined && body.time_ms !== null) out.timeMs = milliseconds(body.time_ms, 'time_ms');
+  if (body.max_nodes !== undefined) out.maxNodes = nodeLimit(body.max_nodes, 'max_nodes');
+  if (body.max_depth !== undefined) out.maxDepth = depthLimit(body.max_depth, 'max_depth');
+  return out;
 }
 
 /** The server refuses to move for the AI: that seat is the search's. */
@@ -190,14 +215,15 @@ function playForClient(store, session, body, query, ctx) {
 function playForAi(store, session, body) {
   requirePlaying(session);
   const wanted = body.moves ?? 'all';
+  const budget = budgetOverrides(body);
   const played = [];
   if (wanted === 'all' || wanted === true) {
-    played.push(...store.playAiSeats(session));
+    played.push(...store.playAiSeats(session, 100, budget));
   } else {
     const count = Number(wanted);
     if (!Number.isInteger(count) || count < 1) throw E.badRequest(`moves expects a whole number of plies or "all", got '${body.moves}'`);
     for (let i = 0; i < count; i += 1) {
-      const ply = store.playAiPly(session);
+      const ply = store.playAiPly(session, budget);
       if (!ply) break;
       played.push(ply);
     }
@@ -213,16 +239,7 @@ function playForAi(store, session, body) {
 function giveHint(store, session, body) {
   requirePlaying(session);
   const side = body.side ? sideName(body.side) : session.game.turn;
-  const overrides = {};
-  if (body.level) {
-    try {
-      levelOf(body.level);
-    } catch (error) {
-      throw E.badRequest(error.message);
-    }
-    overrides.level = String(body.level).toLowerCase();
-  }
-  if (body.time_ms !== undefined) overrides.timeMs = readTimeMs(body.time_ms, 'time_ms');
+  const overrides = budgetOverrides(body);
 
   const { move, info } = store.suggest(session, side, overrides);
   const size = session.game.board.size;
@@ -241,6 +258,9 @@ function giveHint(store, session, body) {
         depth: info.depth,
         nodes: info.nodes,
         score: info.score,
+        time_ms: info.time_ms,
+        source: info.source,
+        max_nodes: overrides.maxNodes === undefined ? session.maxNodes[side] : overrides.maxNodes,
       },
       game: state(store, session),
     },
@@ -251,13 +271,9 @@ function changeSeats(store, session, body, ctx) {
   claimGame(session, ctx);
   store.applySeats(session, body.seats, body.names);
   if (body.levels !== undefined || body.level !== undefined) session.levels = levelsFrom(body.levels, body.level);
-  const hasTime = body.time_ms !== undefined || body.time_ms_a !== undefined || body.time_ms_d !== undefined;
-  if (hasTime) {
-    for (const side of SIDES) {
-      const perSide = side === SIDE_ATTACKER ? body.time_ms_a : body.time_ms_d;
-      session.timeMs[side] = readTimeMs(perSide ?? body.time_ms, side === SIDE_ATTACKER ? 'time_ms_a' : 'time_ms_d');
-    }
-  }
+  // Saying anything about a budget replaces the whole set: a seat handed over should
+  // not inherit a ceiling nobody mentioned.
+  if (hasBudgets(body)) Object.assign(session, budgetsFrom(body, store.budgetDefaults));
   announce(store, session);
   return { body: { ok: true, game: state(store, session) } };
 }
@@ -459,4 +475,4 @@ function handleApi(store, request = {}) {
   }
 }
 
-module.exports = { handleApi, ROUTES, MOVE_OPTIONS, SIDES, MAX_THINK_MS };
+module.exports = { handleApi, ROUTES, MOVE_OPTIONS, SIDES };

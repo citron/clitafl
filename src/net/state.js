@@ -116,6 +116,24 @@ function levelsView() {
 }
 
 /**
+ * What the next AI move of each side is allowed to cost: the wall-clock budget, the
+ * ceiling in nodes, the ceiling in depth. A `0` means the strength preset decides.
+ * A reply that plays several AI seats costs at most the sum of their budgets, which is
+ * the number a client wants before it commits to a request.
+ */
+function budgetView(session) {
+  const out = {};
+  for (const side of [SIDE_ATTACKER, SIDE_DEFENDER]) {
+    out[side] = {
+      time_ms: session.timeMs[side],
+      max_nodes: session.maxNodes ? session.maxNodes[side] : 0,
+      max_depth: session.maxDepth ? session.maxDepth[side] : 0,
+    };
+  }
+  return out;
+}
+
+/**
  * Who plays each seat, in the shape a client reads it: the seat kind, the label the
  * lobby gave it, whether a token guards it, and whether the seat is still open. The
  * token itself is never in a view — the reply that mints it is the only place it appears.
@@ -163,6 +181,7 @@ function gameView(session, options = {}) {
     open_seats: openSeatsView(session),
     levels: { attacker: session.levels[SIDE_ATTACKER], defender: session.levels[SIDE_DEFENDER] },
     time_ms: { attacker: session.timeMs[SIDE_ATTACKER], defender: session.timeMs[SIDE_DEFENDER] },
+    budget: budgetView(session),
     seed: session.seed,
     moves_played: game.history.length,
     last_move: last ? plyView(game, last, game.history.length - 1) : null,
@@ -221,6 +240,7 @@ module.exports = {
   capturesView,
   plyView,
   levelsView,
+  budgetView,
   playersView,
   openSeatsView,
   gameView,

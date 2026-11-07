@@ -24,6 +24,8 @@ const OPTIONS = {
   'level-a': { type: 'string' },
   'level-d': { type: 'string' },
   time: { type: 'string' },
+  nodes: { type: 'string' },
+  depth: { type: 'string' },
   moves: { type: 'string' },
   record: { type: 'string' },
   load: { type: 'string' },
@@ -65,6 +67,8 @@ Options
       --level <name>        AI strength: ${LEVEL_IDS.join(' | ')}
       --level-a / --level-d strength per side (attacker / defender)
       --time <ms>           thinking budget per AI move
+      --nodes <n>           ceiling in search nodes per AI move: the cost that holds on any machine
+      --depth <n>           ceiling on how deep the AI searches (0 / unset: the level's own)
       --moves <file>        read moves/commands from a file (scripted game)
       --load <file>         resume a saved game
       --record <file>       write the game record as JSON
@@ -128,10 +132,19 @@ function num(value, name) {
   return n;
 }
 
+/** A count the AI obeys literally, so a fraction or a negative is the player's typo. */
+function whole(value, name, min = 0) {
+  const n = num(value, name);
+  if (!Number.isInteger(n) || n < min) throw new Error(`--${name} expects a whole number >= ${min}, got '${value}'`);
+  return n;
+}
+
 function numbersFrom(values) {
   return {
     size: values.size ? num(values.size, 'size') : null,
     timeMs: values.time ? num(values.time, 'time') : null,
+    maxNodes: values.nodes ? whole(values.nodes, 'nodes') : null,
+    maxDepth: values.depth ? whole(values.depth, 'depth', 1) : null,
     seed: values.seed ? num(values.seed, 'seed') : null,
     fps: values.fps ? num(values.fps, 'fps') : null,
     maxPlies: values['max-plies'] ? num(values['max-plies'], 'max-plies') : null,
@@ -162,6 +175,8 @@ function buildController(values) {
     seats,
     levels,
     timeMs: numbers.timeMs,
+    maxNodes: numbers.maxNodes,
+    maxDepth: numbers.maxDepth,
     moves: values.moves,
     record: values.record,
   });
@@ -187,6 +202,12 @@ function serverBanner(started) {
     '',
     `  open games ${store.maxGames} at a time, forgotten after ${ttlMinutes} minutes without a request`,
     `  watchers   ${store.maxWatchers} connections may watch one game as it is played`,
+    ...(store.budgetDefaults.maxNodes
+      ? [`  ceiling    ${store.budgetDefaults.maxNodes} search nodes per AI move (the budget that costs the same on any machine)`]
+      : []),
+    ...(store.budgetDefaults.maxDepth
+      ? [`  depth      ${store.budgetDefaults.maxDepth} plies of search per AI move`]
+      : []),
     ...(store.stateDir
       ? [`  games      kept in ${store.stateDir}, and found again when the server starts`]
       : []),
@@ -214,6 +235,8 @@ async function runServer(args) {
     stateDir: args['state-dir'] ? path.resolve(process.cwd(), args['state-dir']) : undefined,
     ttlMs: args.ttl ? Math.round(num(args.ttl, 'ttl') * 60000) : undefined,
     timeMs: args.time ? num(args.time, 'time') : undefined,
+    maxNodes: args.nodes ? whole(args.nodes, 'nodes') : undefined,
+    maxDepth: args.depth ? whole(args.depth, 'depth', 1) : undefined,
     version: readVersion(),
   });
   process.stdout.write(`${serverBanner(started)}\n\npress ctrl-c to stop\n`);
@@ -296,6 +319,8 @@ async function runCommand(command, args, positionals) {
       attackerLevel: args['level-a'],
       defenderLevel: args['level-d'],
       timeMs: numbers.timeMs ?? 60,
+      maxNodes: numbers.maxNodes ?? 0,
+      maxDepth: numbers.maxDepth ?? 0,
       seed: numbers.seed ?? 1,
       maxPlies: numbers.maxPlies ?? 500,
     });
@@ -342,4 +367,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, parseCli, usage, seatsFrom, COMMANDS };
+module.exports = { main, parseCli, usage, seatsFrom, numbersFrom, COMMANDS };

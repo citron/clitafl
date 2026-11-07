@@ -268,6 +268,18 @@ test('the zobrist key follows the board as moves and captures are played', () =>
   assert.equal(plies, 40, 'the key survives a long game');
 });
 
+test('a depth ceiling answers the ceiling, and costs what it costs', () => {
+  const board = Board.fromVariant(getVariant('copenhagen'));
+  // The ceiling is the last word on how deep the search goes, and the clock is free:
+  // a caller who wants a cheap answer asks for a shallow one, on any machine.
+  const ceiling = { maxNodes: 200000, timeMs: 60000 };
+  const shallow = searchBestMove(board, SIDE_ATTACKER, { ...ceiling, maxDepth: 2 });
+  const deeper = searchBestMove(board, SIDE_ATTACKER, { ...ceiling, maxDepth: 6 });
+  assert.equal(shallow.depth, 2, 'the search stops at the depth it was given');
+  assert.ok(deeper.depth > shallow.depth, `the same ceiling searches deeper: ${deeper.depth} over ${shallow.depth}`);
+  assert.ok(deeper.nodes > 10 * shallow.nodes, `and the price is the work the ceiling asked for: ${deeper.nodes} over ${shallow.nodes}`);
+});
+
 test('a node budget makes the search reproducible and the table is reused', () => {
   const board = Board.fromVariant(getVariant('copenhagen'));
   const budget = { maxDepth: 8, timeMs: 60000, maxNodes: 40000 };

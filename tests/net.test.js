@@ -35,6 +35,31 @@ function openGame(store, spec = {}) {
   return out.body;
 }
 
+/**
+ * A position the book has nothing to say about: the opening played out on a cheap
+ * clock. A node ceiling is a ceiling on a search, and a book move is no search.
+ */
+function midGame(store, spec = {}) {
+  const variants = ['tablut', 'copenhagen', 'brandub'];
+  for (const variant of variants) {
+    const opened = openGame(store, {
+      variant,
+      seats: { attacker: 'ai', defender: 'ai' },
+      level: 'easy',
+      time_ms: 2,
+      ...spec,
+    });
+    const id = opened.game.id;
+    for (let i = 0; i < 20; i += 1) {
+      const game = req(store, 'GET', `/api/games/${id}`).body.game;
+      if (game.ply >= 12 || game.is_over) break;
+      req(store, 'POST', `/api/games/${id}/ai`, { body: { moves: 1 } });
+    }
+    if (req(store, 'GET', `/api/games/${id}`).body.game.ply >= 12) return id;
+  }
+  assert.fail('no variant reaches ply 12 on a cheap clock');
+}
+
 function firstMoveOf(body) {
   const moves = body.game.legal_moves;
   assert.ok(Array.isArray(moves) && moves.length, 'the state lists the legal moves of the side to move');
@@ -55,6 +80,10 @@ test('GET /api describes the API as data', () => {
   }
   assert.deepEqual(index.seats.kinds, ['human', 'ai', 'agent', 'client', 'open']);
   assert.match(index.seats.tokens, /x-clitafl-token/, 'the index says how a seat token is sent');
+  assert.deepEqual(index.budget.keys, ['time_ms', 'max_nodes', 'max_depth'], 'the index says what one AI move may cost');
+  assert.match(index.budget.about, /5 ?000 ?000/, 'and the caps it enforces, in numbers');
+  assert.match(index.budget.about, /capped at 40/, 'the depth cap too');
+  assert.match(index.budget.predictable, /nodes/, 'and which of those ceilings costs the same on any machine');
   assert.ok(index.playing.length >= 3, 'the index shows how to start playing');
 });
 
@@ -194,6 +223,9 @@ test('bad input is answered with a status and a readable message', () => {
     ['level', { levels: { attacker: 'legendary' } }, 400, /level/],
     ['seat', { seats: { attacker: 'robot' } }, 400, /human \| ai \| agent/],
     ['time', { time_ms: -5 }, 400, /time_ms/],
+    ['nodes', { max_nodes: 'many' }, 400, /max_nodes/],
+    ['nodes', { max_nodes: -1 }, 400, /max_nodes/],
+    ['depth', { max_depth: 1.5 }, 400, /max_depth/],
     ['seed', { seed: 'lots' }, 400, /seed/],
     ['max_plies', { max_plies: 0 }, 400, /max_plies/],
   ];
@@ -463,6 +495,83 @@ test('the store validates seats, levels and clocks the way the API documents the
   assert.equal(maxed.variant.max_plies, 12);
 });
 
+test('the ceilings of one AI move are the caller\'s numbers, per seat', () => {
+  const store = makeStore();
+  const nobody = { seats: { attacker: 'human', defender: 'human' } };
+
+  const { game } = openGame(store, { ...nobody, max_nodes: 5000, max_nodes_d: 20000, max_depth: 6 });
+  assert.deepEqual(game.budget.attacker, { time_ms: 30, max_nodes: 5000, max_depth: 6 }, 'the state answers what the next AI move may cost');
+  assert.equal(game.budget.defender.max_nodes, 20000, 'and the per-seat spelling wins for that seat');
+  assert.equal(game.budget.defender.max_depth, 6, 'a shared ceiling covers both seats');
+
+  const silent = openGame(store, nobody).game;
+  assert.deepEqual(silent.budget.attacker, { time_ms: 30, max_nodes: 0, max_depth: 0 }, 'a game that says nothing leaves it to the clock, and to the strength preset');
+
+  // The ceiling is a number, so the worst case of a reply is a number too: a caller
+  // can put a bound on a request without knowing how fast the server's CPU is.
+  const capped = openGame(store, { ...nobody, max_nodes: 10 ** 12, max_depth: 999 }).game;
+  assert.equal(capped.budget.attacker.max_nodes, 5000000, 'a node ceiling is capped, as the clock is');
+  assert.equal(capped.budget.attacker.max_depth, 40);
+
+  const seats = req(store, 'POST', `/api/games/${game.id}/seats`, { body: { seats: { attacker: 'ai' }, max_nodes_a: 4000 } });
+  assert.equal(seats.status, 200);
+  assert.equal(seats.body.game.budget.attacker.max_nodes, 4000, 'a seat change can set the ceiling it hands the AI');
+  assert.equal(seats.body.game.budget.defender.max_nodes, 0, 'a budget said once replaces the set: the other seat starts from the server default');
+  assert.equal(seats.body.game.budget.attacker.time_ms, 30, 'and so does its clock');
+  assert.equal(seats.body.game.budget.attacker.max_depth, 0, 'and its depth');
+
+  const nonsense = req(store, 'POST', `/api/games/${game.id}/seats`, { body: { max_depth: 'deep' } });
+  assert.equal(nonsense.status, 400, 'a depth that is not a number is refused');
+
+  const nodes = store.get(game.id).maxNodes[SIDE_ATTACKER];
+  assert.equal(nodes, 4000, 'the session carries the ceiling the state reports');
+});
+
+test('a node ceiling is obeyed: the search costs the work the caller named', () => {
+  const store = makeStore();
+  const id = midGame(store, { level: 'grandmaster' });
+  const budget = { max_nodes: 4000, max_depth: 40, time_ms: 60000 };
+  const out = req(store, 'POST', `/api/games/${id}/ai`, { body: { moves: 1, ...budget } });
+  assert.equal(out.status, 200, JSON.stringify(out.body));
+  const ai = out.body.game.last_ai;
+  assert.equal(ai.source, 'search', 'the position is past the book, so the search played it');
+  assert.equal(ai.max_nodes, 4000, 'the reply names the ceiling the move obeyed');
+  assert.ok(ai.nodes >= 4000 && ai.nodes < 8000, `the search spent its ceiling and stopped: ${ai.nodes}`);
+  assert.ok(Number.isFinite(ai.time_ms) && ai.time_ms >= 0, 'the reply says what the move cost in time as well');
+
+  // One call can spend more than the game's ceiling: a client that wants a deeper
+  // look asks for it in the request that asks for it.
+  const deeper = req(store, 'POST', `/api/games/${id}/ai`, { body: { moves: 1, ...budget, max_nodes: 30000 } });
+  const deep = deeper.body.game.last_ai;
+  assert.ok(deep.nodes > ai.nodes, `a per-call ceiling buys a deeper search: ${deep.nodes} over ${ai.nodes}`);
+  // The count is checked every 1 024 nodes and the walk out of the tree counts too, so
+  // the reply spends its ceiling rounded up on that tick, plus the unwind.
+  assert.ok(deep.nodes >= 30000 && deep.nodes < 60000, `and stops near the ceiling it was given: ${deep.nodes}`);
+  assert.equal(deep.max_nodes, 30000);
+  assert.equal(out.body.game.budget.attacker.max_nodes, 0, 'the game itself keeps the ceiling it was opened with');
+
+  const garbage = req(store, 'POST', `/api/games/${id}/ai`, { body: { moves: 1, max_nodes: -3 } });
+  assert.equal(garbage.status, 400);
+  assert.match(garbage.body.error, /max_nodes/);
+});
+
+test('a hint, too, obeys the ceiling of the call that asks for it', () => {
+  const store = makeStore();
+  const id = midGame(store, { level: 'grandmaster' });
+  const cheap = req(store, 'POST', `/api/games/${id}/hint`, { body: { max_nodes: 3000, max_depth: 40, time_ms: 60000 } });
+  assert.equal(cheap.status, 200, JSON.stringify(cheap.body));
+  assert.equal(cheap.body.hint.source, 'search', 'the hint is a search, not the book');
+  assert.ok(cheap.body.hint.nodes >= 3000 && cheap.body.hint.nodes < 6000, `a hint spends the ceiling of the call that asks for it: ${cheap.body.hint.nodes}`);
+  assert.equal(cheap.body.hint.max_nodes, 3000, 'the hint says the ceiling it searched under');
+  assert.equal(cheap.body.game.budget.attacker.max_nodes, 0, 'a hint spends no ceiling the game carries');
+
+  const before = cheap.body.game.ply;
+  const shallow = req(store, 'POST', `/api/games/${id}/hint`, { body: { max_depth: 1, max_nodes: 0, time_ms: 60000 } });
+  assert.equal(shallow.status, 200, JSON.stringify(shallow.body));
+  assert.equal(shallow.body.hint.depth, 1, 'a depth ceiling is the last word on how deep the search goes');
+  assert.equal(shallow.body.game.ply, before, 'and a hint touches no board');
+});
+
 test('a full exchange between the AI seats is a list of plies with captures described', () => {
   const store = makeStore();
   const opened = openGame(store, { variant: 'brandub', size: 7, seats: { attacker: 'ai', defender: 'ai' }, level: 'easy', time_ms: 3 });
@@ -572,6 +681,8 @@ test('a state directory keeps every game as a save file, and a new server plays 
       seats: { attacker: 'ai', defender: 'human' },
       levels: { attacker: 'easy', defender: 'medium' },
       time_ms_a: 40,
+      max_nodes_a: 5000,
+      max_depth: 8,
       seed: 7,
     });
     const id = opened.game.id;
@@ -585,6 +696,8 @@ test('a state directory keeps every game as a save file, and a new server plays 
     assert.equal(opening.session.seats.attacker, 'ai');
     assert.equal(opening.session.levels.defender, 'medium');
     assert.equal(opening.session.time_ms.attacker, 40);
+    assert.equal(opening.session.max_nodes.attacker, 5000, "and the ceiling each seat's AI obeys");
+    assert.equal(opening.session.max_depth.defender, 8);
     assert.equal(opening.session.seed, 7);
 
     const move = firstMoveOf(opened);
@@ -603,6 +716,9 @@ test('a state directory keeps every game as a save file, and a new server plays 
     assert.equal(back.seats.attacker, 'ai', 'the seats come back');
     assert.equal(back.levels.defender, 'medium');
     assert.equal(back.timeMs.attacker, 40);
+    assert.equal(back.maxNodes.attacker, 5000, 'a restarted server obeys the same ceiling');
+    assert.equal(back.maxNodes.defender, 0, 'the seat that was given none keeps none');
+    assert.equal(back.maxDepth.defender, 8, 'and the shared depth ceiling');
     assert.equal(back.seed, 7, 'and so does the seed the AI seats are built from');
     const restored = req(second, 'GET', `/api/games/${id}`).body.game;
     assert.equal(restored.ply, afterMove.ply, 'the board is where it was left');

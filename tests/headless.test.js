@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { Game } = require('../src/rules/game');
 const { VARIANTS } = require('../src/rules/variants');
 const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../src/rules/pieces');
+const { AIPlayer } = require('../src/ai/player');
 const { playMatch, seededRng } = require('../src/headless');
 
 // A node budget, not a clock: the matches in this suite must replay exactly.
@@ -70,6 +71,26 @@ test('the two sides can be set to different strengths', () => {
   });
   assert.ok(match.isGameOver, 'a mixed match finishes');
   assert.equal(match.history[0].side, SIDE_ATTACKER);
+});
+
+test('a depth ceiling keeps a match inside the node ceiling it is given', () => {
+  // Depth is the knob that makes a node ceiling the whole cost of a move: a shallow
+  // search finishes its iterations inside the budget, so no clock is ever the limit.
+  const match = playMatch({
+    game: Game.create('tablut'),
+    level: 'grandmaster',
+    maxDepth: 1,
+    maxNodes: 3000,
+    timeMs: 60000,
+    seed: 3,
+    maxPlies: 60,
+  });
+  assert.ok(match.isGameOver, `a one-ply search plays a whole game: ${match.reason}`);
+  assert.equal(match.history.length, match.plies);
+  const board = match.game.board;
+  const ai = new AIPlayer('grandmaster', { maxDepth: 1, maxNodes: 3000, timeMs: 60000, rng: seededRng(4) });
+  const { info } = ai.chooseMove(match.game, board.turn);
+  assert.ok(info.nodes > 0 && info.nodes <= 3000, `the search of a ply costs at most its ceiling: ${info.nodes}`);
 });
 
 test('a custom board size plays too', () => {
