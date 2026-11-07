@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
 
 const { serve, staticFile, MAX_BODY_BYTES } = require('../src/net/server');
@@ -246,6 +248,38 @@ test('the server keeps the number of games it was configured for', async () => {
     assert.equal(freed.status, 200);
     assert.equal((await call(app, 'POST', '/api/games', { seats: { attacker: 'human', defender: 'human' } })).status, 201);
   });
+});
+
+test('a server with a state directory keeps what the socket plays, and says where', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clitafl-state-'));
+  try {
+    await withApp({ stateDir: dir }, async (app) => {
+      assert.equal(app.store.stateDir, dir);
+      assert.equal((await call(app, 'GET', '/api/health')).body.state_dir, dir, 'health points at the directory');
+
+      const created = await call(app, 'POST', '/api/games', { variant: 'brandub', seats: { attacker: 'agent', defender: 'agent' }, auto: false });
+      const id = created.body.game.id;
+      const file = path.join(dir, `${id}.json`);
+      assert.ok(fs.existsSync(file), 'a game opened over HTTP is on disk at once');
+      const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.equal(onDisk.format, 'clitafl-save-v1', 'as a save file');
+      assert.equal(onDisk.variant, 'brandub');
+      assert.equal(onDisk.session.seats.defender, 'human', 'the agent seat is written as the caller seat');
+
+      const move = created.body.game.legal_moves[0];
+      const played = await call(app, 'POST', `/api/games/${id}/moves`, { from: move.from, to: move.to });
+      assert.equal(played.status, 200);
+      assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).ply, played.body.game.ply, 'the move is on disk as soon as it is played');
+
+      const resumed = await call(app, 'POST', '/api/games', { load: onDisk });
+      assert.equal(resumed.status, 201, 'a file from the directory is a save file the API takes back');
+
+      await call(app, 'DELETE', `/api/games/${id}`);
+      assert.ok(!fs.existsSync(file), 'and the file goes with the game');
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('serve listens where it is told and reports a usable url', async () => {

@@ -69,9 +69,18 @@
   sink)` / `publish(session, event, payload)` with a `maxWatchers` cap, a sink that throws
   being dropped, and `announceClosed` before a game leaves the map. The sink is
   `(event, payload)`: the store knows nothing about HTTP, the framing is the server's.
+  With `stateDir`, every game it changes is written out (`markDirty` marks, `touch`
+  writes), and the directory is read back at startup: newest first, up to the slots, a
+  game older than the TTL pruned where it lies, a file that is not a game left alone.
+- **disk.js** — one directory of games: `save` writes a game atomically (a temp file in
+  the directory, then a rename), `remove` takes the file with the game, `loadAll` reads
+  every file back, most recent first, skipping what is not a game. The file is the
+  `clitafl-save-v1` save plus a `session` key — seats, levels, clocks, seed, dates — so
+  the same file loads through `POST /api/games {"load": …}` and `--load` unchanged.
 - **api.js** — the route table and the handlers. `GET /api` describes every endpoint as
   data, so a client can discover the game without reading a manual. One `announce` helper
-  is where a change is pushed: a `ply` event per move, then the `state`.
+  is where a change is pushed — a `ply` event per move, then the `state` — and where a
+  game is marked as worth writing to the state directory.
 - **server.js** — `node:http`: `/api/*` to the API, everything else as files from `web/`
   (resolve-then-check traversal guard), CORS, `OPTIONS`, a 1 MiB body cap, HEAD, JSON
   errors, `serve` that reports the address it bound. It owns the one route that is not a
@@ -129,23 +138,29 @@
 - **cli.test.js** — 17 tests: flag parsing, seats, per-side levels, help text, and the real
   commands run in a child process (`variants`, `rules` for copenhagen, brandub and alea,
   `--version`, bad command, `match`, `--record`, scripted games, `--load`, `serve` flag
-  checks — port, TTL, `--max-watchers` — and its banner).
-- **net.test.js** — 25 tests: the API as a function — the endpoint index, the catalogues
+  checks — port, TTL, `--max-watchers`, a `--state-dir` that cannot be made — and its
+  banner).
+- **net.test.js** — 28 tests: the API as a function — the endpoint index, the catalogues
   (including a 19×19 alea evangelii game with its 16 exits and citadel), opening a game,
   the move view (`from,to,piece,san`, the king named as such), `moves=turn|none|all`, an
   exchange with the AI answering, every way to send a move, every bad input, refusals
   (`409`), the AI seat playing n plies or all, hints, undo, resign, seats, the record, the
   rules text, the save round-trip, the game list, `max_games`, the TTL, unknown routes and
-  verbs, and the push watchers: a `ply` per move and the state after it, a seat change
-  pushing and a hint not, the close on delete and on the TTL sweep, the watcher cap, and a
-  sink whose socket is gone being dropped.
-- **server.test.js** — 12 tests: over a real socket — the page, CSS and JS, HEAD, traversal
+  verbs, the push watchers (a `ply` per move and the state after it, a seat change pushing
+  and a hint not, the close on delete and on the TTL sweep, the watcher cap, and a sink
+  whose socket is gone being dropped), and the state directory: a game written as a save
+  file at once and after every move, read back by a second store with its seats, levels,
+  clocks and seed and played on, the file going with a DELETE and a sweep, the newest
+  games loaded first up to the slots, a broken file left alone, an old game pruned.
+- **server.test.js** — 13 tests: over a real socket — the page, CSS and JS, HEAD, traversal
   probes, JSON over HTTP, CORS preflight, broken JSON, missing files, `405`, the body cap,
-  the game cap, `serve` on a free port, the `serve` command of the CLI as a child process,
-  played over HTTP and stopped with SIGTERM, and the event stream read frame by frame: the
-  content type, the state it opens with, the `ply` and `state` a move produces, the `closed`
-  frame that ends the response, the `:ping` comment on a quiet game, the cap answered as a
-  `409`, and a client that hangs up stopping being a watcher.
+  the game cap, `serve` on a free port, a state directory behind a live server (the file of
+  a game played over HTTP, `state_dir` in health, the file going with the game), the
+  `serve` command of the CLI as a child process, played over HTTP and stopped with SIGTERM,
+  and the event stream read frame by frame: the content type, the state it opens with, the
+  `ply` and `state` a move produces, the `closed` frame that ends the response, the
+  `:ping` comment on a quiet game, the cap answered as a `409`, and a client that hangs up
+  stopping being a watcher.
 
 ## Docs
 

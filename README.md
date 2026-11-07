@@ -25,7 +25,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 134 tests, node's built-in runner, no download needed
+npm test        # 138 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -68,8 +68,10 @@ scripted game, `--load <file>` to resume, `--record <file>` to write the record,
 `--ascii`, `--no-color` (also honours `NO_COLOR`), `--no-animation`.
 
 For `serve`: `--port <n>` (0 asks the operating system for a free one), `--host <addr>`
-(default `127.0.0.1`), `--max-games <n>` (default 50), `--ttl <minutes>` — how long a game
-nobody touches is kept (default 180), `--time <ms>` — the default thinking budget. Ctrl-c
+(default `127.0.0.1`), `--max-games <n>` (default 50), `--max-watchers <n>` — connections
+that may watch one game as it is played (default 8), `--ttl <minutes>` — how long a game
+nobody touches is kept (default 180), `--state-dir <dir>` — keep the open games there and
+find them again after a restart, `--time <ms>` — the default thinking budget. Ctrl-c
 closes the server and exits 0.
 
 ## Web board and API
@@ -152,6 +154,9 @@ Notes for a client:
 - The save file from `/export` comes back as `POST /api/games {"load": …}`, so a game can
   leave the server and come back to it — that is also how the CLI's `--record` and `--load`
   files look.
+- With `--state-dir <dir>`, that file is written for you: one per open game, atomically, as
+  the game is played, and pruned when the game closes. A server that starts on a directory
+  it used before picks the games up where they stopped, seats, clocks and seed included.
 - `GET /api/games/:id/events` is that game pushed to you: an `event: state` to start, then
   one `event: ply` per move — yours or another client's — with a `event: state` after it, and
   `event: closed` when the game goes. `curl -sN` reads it, a browser uses `EventSource`, and
@@ -159,8 +164,10 @@ Notes for a client:
   stream is a convenience, not a second protocol.
 
 Games live in memory: `--max-games` slots, least recently used ones forgotten after the
-`--ttl`. The server binds `127.0.0.1` by default — `--host 0.0.0.0` is how you put it on a
-network, and there is no authentication, so do that only where you mean it.
+`--ttl`. With `--state-dir <dir>` they also live on disk, one save file per game, so a
+restart finds them again; `GET /api/health` reports the directory (`state_dir`) and the
+number of open games. The server binds `127.0.0.1` by default — `--host 0.0.0.0` is how
+you put it on a network, and there is no authentication, so do that only where you mean it.
 
 ## Playing
 
@@ -268,7 +275,8 @@ src/ui/display.js       board, legend, banner, rules text, move animation
 src/cli/controller.js   one session: seats, turn loop, in-game commands, cleanup
 src/net/errors.js       ApiError and the status helpers: 400, 404, 405, 409, 413
 src/net/state.js        the public JSON view of a game: board, moves, record, rules text
-src/net/store.js        sessions, seats, levels, clocks, TTL, max games
+src/net/store.js        sessions, seats, levels, clocks, TTL, max games, watchers
+src/net/disk.js         the state directory: one save file per game, written atomically
 src/net/api.js          the route table and the handlers, self-documenting
 src/net/server.js       node:http: static files, CORS, body cap, /api dispatch
 src/headless.js         AI vs AI without a terminal
@@ -286,7 +294,7 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-134 tests on `node:test` — no framework to install. They cover the historical armies and
+138 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
 king capture, the marked squares capturing for both sides), movement, capture counts (open
 field, beside and on a castle, edge), siege sealing, apply/undo symmetry, save round-trips,
@@ -296,9 +304,10 @@ following only captures, the Zobrist key over a 40-ply game, a node budget repla
 itself, book moves being legal), the renderer (glyphs, colour off, legend counts, rules
 text, animation never touching the real board), the CLI itself (flags, exit codes,
 records, scripted games), the API (every endpoint, every error path, seats, clocks, TTL,
-save round-trips, the watchers of a game hearing every change), and the HTTP layer over a
-real socket (static files, traversal attempts, CORS, body cap, the event stream frame by
-frame, and the `serve` command of the CLI started as a child process).
+save round-trips, the watchers of a game hearing every change, games written to and read
+back from a state directory), and the HTTP layer over a real socket (static files,
+traversal attempts, CORS, body cap, the event stream frame by frame, a state directory
+behind a live server, and the `serve` command of the CLI started as a child process).
 
 ## Rules sources
 
@@ -321,7 +330,6 @@ defenders start boxed in around a citadel they may not use.
 
 ## Roadmap
 
-- Games kept on disk (`--state-dir`) so a server can restart without losing them.
 - A lobby: games that two named clients join by id, with a per-seat token.
 - Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.
 - `ard-ri` has 7×7 armies, and 7×7 boards only carry 8 attackers in the symmetric

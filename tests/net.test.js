@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { GameStore } = require('../src/net/store');
 const { handleApi } = require('../src/net/api');
@@ -9,6 +12,10 @@ const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../src/rules/pieces');
 
 function makeStore(options = {}) {
   return new GameStore({ maxGames: 30, timeMs: 30, ...options });
+}
+
+function tempDir(name) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `clitafl-${name}-`));
 }
 
 function req(store, method, path, extra = {}) {
@@ -546,4 +553,120 @@ test('a game swept by the TTL tells its watchers before it goes', () => {
   store.sweep(Date.now() + 1000);
   assert.deepEqual(frames, [['closed', { id: session.id, status: 'playing', reason: null }]]);
   assert.equal(store.size, 0, 'and the slot is free');
+});
+
+test('a state directory keeps every game as a save file, and a new server plays it on', () => {
+  const dir = tempDir('state');
+  try {
+    const store = makeStore({ stateDir: dir });
+    assert.equal(store.stateDir, dir);
+    assert.equal(req(store, 'GET', '/api/health').body.state_dir, dir, 'health says where the games live');
+
+    const opened = openGame(store, {
+      variant: 'tablut',
+      seats: { attacker: 'ai', defender: 'human' },
+      levels: { attacker: 'easy', defender: 'medium' },
+      time_ms_a: 40,
+      seed: 7,
+    });
+    const id = opened.game.id;
+    const file = path.join(dir, `${id}.json`);
+    assert.ok(fs.existsSync(file), 'an open game has its file at once');
+
+    const opening = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(opening.format, 'clitafl-save-v1', 'the file is a save file');
+    assert.equal(opening.variant, 'tablut');
+    assert.equal(opening.session.id, id, 'the save carries the seats around it');
+    assert.equal(opening.session.seats.attacker, 'ai');
+    assert.equal(opening.session.levels.defender, 'medium');
+    assert.equal(opening.session.time_ms.attacker, 40);
+    assert.equal(opening.session.seed, 7);
+
+    const move = firstMoveOf(opened);
+    const played = req(store, 'POST', `/api/games/${id}/moves`, { body: { from: move.from, to: move.to } });
+    assert.equal(played.status, 200);
+    const afterMove = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(afterMove.ply, played.body.game.ply, 'the file is as far on as the state');
+    assert.ok(afterMove.ply >= 2, 'the exchange is on disk: the move and the AI answer');
+    assert.equal(afterMove.history.length, afterMove.ply);
+
+    const resumed = openGame(store, { load: opening });
+    assert.equal(resumed.game.ply, 1, 'the same file goes back through the API as a save');
+
+    const second = makeStore({ stateDir: dir });
+    const back = second.get(id);
+    assert.equal(back.seats.attacker, 'ai', 'the seats come back');
+    assert.equal(back.levels.defender, 'medium');
+    assert.equal(back.timeMs.attacker, 40);
+    assert.equal(back.seed, 7, 'and so does the seed the AI seats are built from');
+    const restored = req(second, 'GET', `/api/games/${id}`).body.game;
+    assert.equal(restored.ply, afterMove.ply, 'the board is where it was left');
+    assert.deepEqual(restored.board.rows, played.body.game.board.rows, 'square for square');
+
+    const next = firstMoveOf({ game: restored });
+    const on = req(second, 'POST', `/api/games/${id}/moves`, { body: { from: next.from, to: next.to } });
+    assert.equal(on.status, 200, 'a game that came back is played on');
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).ply, on.body.game.ply, 'and written back out');
+
+    req(second, 'DELETE', `/api/games/${id}`);
+    assert.ok(!fs.existsSync(file), 'a closed game leaves no file behind');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a game that leaves the store leaves its directory too', () => {
+  const dir = tempDir('state');
+  try {
+    const store = makeStore({ stateDir: dir, ttlMs: 10, seats: { attacker: 'human', defender: 'human' } });
+    const opened = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+    const file = path.join(dir, `${opened.game.id}.json`);
+
+    assert.equal(req(store, 'DELETE', `/api/games/${opened.game.id}`).status, 200);
+    assert.ok(!fs.existsSync(file), 'DELETE frees the file with the slot');
+
+    const kept = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+    const keptFile = path.join(dir, `${kept.game.id}.json`);
+    assert.ok(fs.existsSync(keptFile));
+    store.sweep(Date.now() + 1000);
+    assert.equal(store.size, 0);
+    assert.ok(!fs.existsSync(keptFile), 'the TTL sweep prunes the file as well');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a directory is read back: the newest games first, a broken file left alone, an old game gone', () => {
+  const dir = tempDir('state');
+  try {
+    const store = makeStore({ stateDir: dir });
+    const first = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+    const second = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+    const firstFile = path.join(dir, `${first.game.id}.json`);
+    const future = new Date(Date.now() + 60000).toISOString();
+
+    fs.writeFileSync(path.join(dir, 'broken.json'), '{ this is not json');
+    fs.writeFileSync(path.join(dir, 'notes.txt'), 'a game is not a note');
+    const stale = JSON.parse(fs.readFileSync(path.join(dir, `${second.game.id}.json`), 'utf8'));
+    stale.session.updated_at = '2020-01-01T00:00:00.000Z';
+    fs.writeFileSync(path.join(dir, 'stalegame1.json'), `${JSON.stringify(stale, null, 2)}\n`);
+    const ahead = JSON.parse(fs.readFileSync(firstFile, 'utf8'));
+    ahead.session.updated_at = future;
+    fs.writeFileSync(firstFile, `${JSON.stringify(ahead, null, 2)}\n`);
+
+    const reborn = new GameStore({ stateDir: dir, maxGames: 1, timeMs: 30, ttlMs: 60000 });
+    assert.equal(reborn.size, 1, 'the store loads as many games as it has slots');
+    assert.equal(reborn.list()[0].id, first.game.id, 'starting with the most recently touched');
+    assert.ok(fs.existsSync(path.join(dir, 'broken.json')), 'a file that is not a game is not touched');
+    assert.ok(fs.existsSync(path.join(dir, 'notes.txt')));
+    assert.ok(!fs.existsSync(path.join(dir, 'stalegame1.json')), 'a game older than the TTL is dropped, file and all');
+    assert.equal(reborn.get(first.game.id).game.ply, ahead.ply);
+
+    const room = new GameStore({ stateDir: dir, maxGames: 5, timeMs: 30, ttlMs: 60000 });
+    assert.deepEqual(room.list().map((session) => session.id).sort(), [first.game.id, second.game.id].sort(),
+      'with room enough, both live games come back and the stale one does not');
+    assert.equal(req(room, 'GET', `/api/games/${first.game.id}`).body.game.status, 'playing');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

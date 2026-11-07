@@ -8,8 +8,8 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-134 tests · 20 source files + 3 web files · ~3 900 lines of engine, AI, UI, CLI and server
-(~7 400 with the tests)
+138 tests · 21 source files + 3 web files · ~5 200 lines of engine, AI, UI, CLI and server
+(~8 000 with the tests)
 ```
 
 ## Why version 2 exists
@@ -80,6 +80,21 @@ same game had no way to notice a move it did not make.
 | a stream the API cannot describe | the route is in the endpoint index, in the API notes, in the `serve` banner, in `GET /api/health` (`max_watchers`), and in `--max-watchers` |
 | framing leaking into the store | the sink is `(event, payload)`; the SSE framing (`sseFrame`, `openEventStream`) belongs to the HTTP layer, which owns the response |
 
+## Why version 2.4 exists
+
+A server that restarted forgot every game it had. A long tafl game is exactly the thing you
+do not want to lose to an upgrade, and an agent that keeps a game open over days should not
+have to keep the process alive.
+
+| need | now |
+| --- | --- |
+| a restart losing every open game | `serve --state-dir <dir>` keeps one save file per game in that directory, and a server starting on a directory it used before plays those games on — seats, levels, clocks, seed and record included |
+| a game written only when someone asks for it | a change marks a game (`markDirty`) and the next touch writes it, so the file is as far on as the state; `DELETE` and the TTL sweep take the file with the game |
+| a file that is a server format, not a game format | the file **is** the `clitafl-save-v1` save, with the session in one extra key: it loads through `--load` and `POST /api/games {"load": …}` unchanged |
+| a crash leaving half a file | write to a temp file in the directory, then rename, so the old file is intact until the new one is complete |
+| a directory with a broken file, or more games than slots | a file that cannot be read is left where it is, the newest games are loaded first up to the slots, a game older than the TTL is pruned where it lies, a file that is not a game (`notes.txt`) is not touched |
+| a directory nobody can find | `GET /api/health` answers `state_dir`, the `serve` banner prints it, and it is in the API notes |
+
 ## Design decisions
 
 - **Data, not code, for the rules.** A variant is a row in `src/rules/variants.js`:
@@ -108,6 +123,10 @@ same game had no way to notice a move it did not make.
   `announce()` is the only place a `ply` and a `state` are emitted, so a move played by the
   CLI, the page or an agent looks the same from every side, and a stream that is not wanted
   costs a `Set` lookup.
+- **The save file is the storage format.** The state directory holds `clitafl-save-v1` files
+  with a `session` key around them, not a server-only record: the same file goes out through
+  `/export`, back in through `{"load": …}`, and to `--load`. Nothing is written in a format
+  only the server can read.
 - **A suggestion is not a rule.** A book move is checked against the legal moves, a missing
   book is not an error, and the client renders exactly what the API sends.
 - **Claims are checked by tests.** The historical armies, the king-capture counts, the
@@ -139,7 +158,7 @@ src/rules/     pieces · variants · board · game · notation
 src/ai/        evaluate · zobrist · search · book (+ book.json) · player
 src/ui/        ansi · display
 src/cli/       controller
-src/net/       errors · state · store · api · server
+src/net/       errors · state · store · disk · api · server
 src/           headless.js · index.js
 tools/         make-book.js
 web/           index.html · style.css · app.js
@@ -156,19 +175,18 @@ tests/         board · game · notation · ai · display · headless · cli · 
   matches; plays out every variant headlessly.
 - CLI: `play`, `demo`, `match`, `serve`, `variants`, `rules`, `help`; flags for seats,
   strength, budget, size, seeds, scripts, saves, records, host, port, game slots, watchers
-  per game, TTL, plain-ASCII and colour-off.
+  per game, state directory, TTL, plain-ASCII and colour-off.
 - Web: a board page served by the same process — click-to-move, seat pickers, record,
   hint, AI moves, undo, resign, save, an agent panel with the `curl` of the current game,
   and a stream it watches so a move played elsewhere lands on the board by itself.
-- API: 18 JSON endpoints, self-describing, CORS open, a session store with slots, TTL and
-  watchers, a Server-Sent Events stream per game, save-file round-trips, one message per
-  error.
-- Tests: 134, all green, `npm test`, no dependencies.
+- API: 18 JSON endpoints, self-describing, CORS open, a session store with slots, TTL,
+  watchers and an optional state directory, a Server-Sent Events stream per game, save-file
+  round-trips, one message per error.
+- Tests: 138, all green, `npm test`, no dependencies.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.
 
 ## Roadmap
 
-- Sessions kept on disk (`--state-dir`) so a server can restart without losing a game.
 - Pairing and lobby endpoints (two agents meeting on one server), with a token per seat.
 - Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.
 - `ard-ri` has 7×7 armies, and 7×7 boards only carry 8 attackers in the symmetric

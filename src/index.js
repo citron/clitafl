@@ -34,6 +34,7 @@ const OPTIONS = {
   host: { type: 'string' },
   'max-games': { type: 'string' },
   'max-watchers': { type: 'string' },
+  'state-dir': { type: 'string' },
   ttl: { type: 'string' },
   'no-color': { type: 'boolean' },
   color: { type: 'boolean' },
@@ -74,6 +75,7 @@ Options
       --host <addr>         serve: interface to bind (default 127.0.0.1)
       --max-games <n>       serve: games kept open at once (default 50)
       --max-watchers <n>    serve: connections watching one game (default 8)
+      --state-dir <dir>     serve: keep the open games there, and find them on restart
       --ttl <minutes>       serve: forget a game untouched for that long (default 180)
       --ascii               plain ASCII glyphs, no unicode
       --no-color            disable ANSI colour (also honours NO_COLOR)
@@ -184,6 +186,9 @@ function serverBanner(started) {
     '',
     `  open games ${store.maxGames} at a time, forgotten after ${ttlMinutes} minutes without a request`,
     `  watchers   ${store.maxWatchers} connections may watch one game as it is played`,
+    ...(store.stateDir
+      ? [`  games      kept in ${store.stateDir}, and found again when the server starts`]
+      : []),
     `  client     ${root}`,
     '',
     '  open a game, play the defenders, and the AI answers in the same reply:',
@@ -205,6 +210,7 @@ async function runServer(args) {
     port: args.port === undefined ? 8080 : portNumber(args.port),
     maxGames: args['max-games'] ? num(args['max-games'], 'max-games') : undefined,
     maxWatchers: args['max-watchers'] ? num(args['max-watchers'], 'max-watchers') : undefined,
+    stateDir: args['state-dir'] ? path.resolve(process.cwd(), args['state-dir']) : undefined,
     ttlMs: args.ttl ? Math.round(num(args.ttl, 'ttl') * 60000) : undefined,
     timeMs: args.time ? num(args.time, 'time') : undefined,
     version: readVersion(),

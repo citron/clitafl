@@ -7,6 +7,7 @@ const { AIPlayer, levelOf } = require('../ai/player');
 const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../rules/pieces');
 const { formatSan } = require('../rules/notation');
 const { seededRng } = require('../headless');
+const { GameDirectory } = require('./disk');
 const { capturesView } = require('./state');
 const E = require('./errors');
 
@@ -75,8 +76,9 @@ function levelsFrom(spec, fallback = null) {
 
 /**
  * The open games of one server: a `Game`, plus who plays each seat, how strong the
- * AI is and its thinking clock. In-memory on purpose: `export` is how a game outlives
- * the process, and it keeps the server free of storage dependencies.
+ * AI is and its thinking clock. In memory, and in a directory when one is given
+ * (`stateDir`): `export` is how one game leaves, `--state-dir` is how a server
+ * restarts without losing any of them.
  */
 class GameStore {
   constructor(options = {}) {
@@ -85,9 +87,14 @@ class GameStore {
     this.maxWatchers = wholeNumber(options.maxWatchers ?? 8, 'maxWatchers');
     this.defaultTimeMs = milliseconds(options.timeMs ?? null, 'timeMs');
     this.games = new Map();
+    this.disk = options.stateDir ? new GameDirectory(options.stateDir) : null;
+    if (this.disk) this.loadFromDisk();
   }
 
   get size() { return this.games.size; }
+
+  /** The directory games are kept in, or `null` when they live in memory only. */
+  get stateDir() { return this.disk ? this.disk.dir : null; }
 
   /** Open a game. `spec`: variant, size, seats, levels, time_ms, seed, max_plies, load. */
   create(spec = {}) {
@@ -139,6 +146,7 @@ class GameStore {
       aiInfo: null,
       createdAt: now(),
       updatedAt: now(),
+      dirty: true,
     };
     this.games.set(session.id, session);
     return session;
@@ -154,6 +162,7 @@ class GameStore {
     const session = this.get(id);
     this.announceClosed(session);
     this.games.delete(session.id);
+    if (this.disk) this.disk.remove(session.id);
     return session;
   }
 
@@ -161,7 +170,95 @@ class GameStore {
 
   touch(session) {
     session.updatedAt = now();
+    if (session.dirty) {
+      session.dirty = false;
+      this.persist(session);
+    }
     return session;
+  }
+
+  /** A change worth saving: the next `touch` writes the game out. */
+  markDirty(session) {
+    session.dirty = true;
+    return session;
+  }
+
+  /** Write one game to its directory, when the store has one. */
+  persist(session) {
+    if (!this.disk) return session;
+    try {
+      this.disk.save(session);
+    } catch (error) {
+      // A directory that cannot be written to (a full disk) should not lose a game
+      // that is being played: keep it in memory, and try again at the next touch.
+      session.dirty = true;
+      this.lastSaveError = error.message;
+    }
+    return session;
+  }
+
+  /**
+   * A game that comes back from disk: the save file carries the board and the
+   * record, the `session` key carries the seats around it. Returns `null` for a
+   * file whose game this server cannot play.
+   */
+  adopt(entry) {
+    let game;
+    try {
+      game = Game.deserialize(entry.save);
+    } catch {
+      return null;
+    }
+    const meta = entry.session || {};
+    const seed = Number.isInteger(meta.seed) && meta.seed >= 0
+      ? meta.seed
+      : Math.floor(Math.random() * 1e9);
+    const time = typeof meta.time_ms === 'object' && meta.time_ms ? meta.time_ms : {};
+    const session = {
+      id: entry.id,
+      game,
+      seats: seatsFrom(meta.seats),
+      levels: levelsFrom(meta.levels),
+      timeMs: {
+        [SIDE_ATTACKER]: milliseconds(time[SIDE_ATTACKER] ?? this.defaultTimeMs, 'time_ms_a'),
+        [SIDE_DEFENDER]: milliseconds(time[SIDE_DEFENDER] ?? this.defaultTimeMs, 'time_ms_d'),
+      },
+      seed,
+      rngs: {
+        [SIDE_ATTACKER]: seededRng(seed),
+        [SIDE_DEFENDER]: seededRng(seed + 7919),
+      },
+      aiInfo: null,
+      createdAt: meta.created_at || now(),
+      updatedAt: meta.updated_at || now(),
+      dirty: false,
+    };
+    this.games.set(session.id, session);
+    return session;
+  }
+
+  /**
+   * Read the games of the directory back in, most recent first, up to the slots.
+   * A game nobody has touched for the whole TTL is dropped where it lies: the
+   * server that wrote it stopped, so the sweep that would have taken it never ran.
+   */
+  loadFromDisk() {
+    const loaded = [];
+    const started = Date.now();
+    for (const entry of this.disk.loadAll()) {
+      const age = started - Date.parse(entry.session.updated_at || '');
+      if (Number.isFinite(age) && age > this.ttlMs) {
+        this.disk.remove(entry.id);
+        continue;
+      }
+      if (this.games.size < this.maxGames) {
+        const session = this.adopt(entry);
+        if (session) loaded.push(session);
+      }
+      // a fresh game past the last slot stays on disk: it is there next time
+    }
+    this.sweep(started);
+    return loaded;
   }
 
   /**
@@ -209,6 +306,7 @@ class GameStore {
       if (Number.isFinite(age) && age > this.ttlMs) {
         this.announceClosed(session);
         this.games.delete(id);
+        if (this.disk) this.disk.remove(id);
       }
     }
     return this.games.size;

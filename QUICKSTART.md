@@ -15,13 +15,14 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 134 tests.
+`npm start` does the same as the first line. `npm test` runs the 138 tests.
 
 ## Play in the browser
 
 ```bash
 node src/index.js serve            # http://127.0.0.1:8080
 node src/index.js serve --port 0   # a free port, printed in the banner
+node src/index.js serve --state-dir ./games   # the open games survive a restart
 ```
 
 The page is a click-to-move board with the variant, size, seat and AI-strength pickers,
@@ -81,6 +82,12 @@ redraw, `undo` to take a move back, `save mygame.json` to write a save file,
 node src/index.js play --load mygame.json
 node src/index.js match --record game.json --variant tablut
 ```
+
+A save file is one JSON object (`clitafl-save-v1`): the board, the turn, the record. The
+same object is what `GET /api/games/<id>/export` gives and `POST /api/games {"load": …}`
+takes back. With `serve --state-dir <dir>`, you do not ask for it: the server writes one
+file per open game as it is played, and finds them again when it starts, seats, clocks and
+seed included. `GET /api/health` says which directory is in use.
 
 ## Getting a challenge
 

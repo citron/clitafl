@@ -277,6 +277,19 @@ test('the server command checks its flags before it binds a port', () => {
   assert.equal(watchers.code, 2);
   assert.match(watchers.err, /--max-watchers expects a number/);
 
+  // A state directory that cannot be made is one readable sentence, not a stack trace.
+  const blocked = fs.mkdtempSync(path.join(os.tmpdir(), 'clitafl-cli-'));
+  try {
+    const file = path.join(blocked, 'block');
+    fs.writeFileSync(file, 'a file is not a directory');
+    const state = run(['serve', '--state-dir', path.join(file, 'games')]);
+    assert.equal(state.code, 2);
+    assert.match(state.err, /--state-dir/);
+    assert.ok(!state.err.includes('    at '), state.err);
+  } finally {
+    fs.rmSync(blocked, { recursive: true, force: true });
+  }
+
   // A port somebody else holds: the answer is one line, with no stack trace.
   return withReservedPort((taken) => {
     const out = run(['serve', '--port', String(taken)]);

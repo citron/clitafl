@@ -52,6 +52,7 @@ function apiIndex(store, version) {
       'opening a game plays the opening ply when the opening seat is the AI; {"auto":false} keeps it for the caller',
       'a POST /moves reply plays every AI seat in turn, so one request covers one exchange',
       'GET /api/games/:id/events pushes that game as Server-Sent Events: "ply" per move, then "state"',
+      'games live in memory, and in a directory when the server runs with --state-dir: a restart finds them again, GET /api/health says where',
       'the search is synchronous: a long time_ms blocks that one request, and is capped at 30 s',
       'a failure is one readable sentence: {"error": "...", "status": n}, with 400, 404, 405, 409, 413',
     ],
@@ -110,9 +111,11 @@ function state(store, session, query = {}) {
 /**
  * The watchers of a game hear every change: one `ply` event per move played, then
  * the state, in the same shape `GET /api/games/:id` gives. The framing (SSE) lives
- * in `src/net/server.js`; this is the one place a change is announced.
+ * in `src/net/server.js`; this is the one place a change is announced — and the one
+ * place a game is marked as worth writing to the state directory.
  */
 function announce(store, session, played = []) {
+  store.markDirty(session);
   for (const ply of played) store.publish(session, 'ply', ply);
   store.publish(session, 'state', S.gameView(session, { moves: 'turn' }));
 }
@@ -246,6 +249,7 @@ const ROUTES = [
       games_open: store.size,
       max_games: store.maxGames,
       max_watchers: store.maxWatchers,
+      state_dir: store.stateDir,
       variants: V.VARIANT_IDS,
       levels: LEVEL_IDS,
       engine: 'negamax + alpha-beta, transposition table, killer moves, quiescence, opening book, time or node budget',
