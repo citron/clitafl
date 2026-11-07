@@ -76,7 +76,32 @@ test('a new game arrives with the board, the seats and the moves of the side to 
   assert.equal(game.board.counts.king, 1);
   assert.ok(game.legal_moves.length > 0);
   assert.equal(game.legal_moves[0].san, `${game.legal_moves[0].from}-${game.legal_moves[0].to}`);
+  assert.ok(game.legal_moves.every((m) => m.piece === 'defender'), 'a move names the man that moves');
   assert.equal(game.url, `/api/games/${game.id}`);
+});
+
+test('a legal move names the man that moves, the king included', () => {
+  const store = makeStore();
+  const { game } = openGame(store, {
+    variant: 'brandub', seats: { attacker: 'human', defender: 'human' }, auto: false,
+  });
+  const { id } = game;
+  assert.ok(game.legal_moves.length > 0);
+  assert.ok(game.legal_moves.every((m) => m.piece === 'attacker'), 'at the start, only soldiers move');
+
+  const play = (san) => {
+    const out = req(store, 'POST', `/api/games/${id}/moves`, { body: { move: san } });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+  };
+  play('d1-d2');
+  play('c4-b4'); // the defender steps aside and frees his king
+  play('b2-b1');
+
+  const both = req(store, 'GET', `/api/games/${id}`, { query: { moves: 'all' } }).body.game;
+  assert.ok(both.legal_moves.defender.some((m) => m.piece === 'king' && m.san === 'd4-c4'),
+    'the king is named, not a faceless soldier');
+  assert.ok(both.legal_moves.defender.every((m) => m.piece === 'defender' || m.piece === 'king'));
+  assert.ok(both.legal_moves.attacker.every((m) => m.piece === 'attacker'));
 });
 
 test('moves=all lists both armies, moves=none lists none', () => {

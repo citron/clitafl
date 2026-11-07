@@ -94,8 +94,9 @@
 - **cli.test.js** — 16 tests: flag parsing, seats, per-side levels, help text, and the real
   commands run in a child process (`variants`, `rules`, `--version`, bad command, `match`,
   `--record`, scripted games, `--load`, `serve` flag checks and its banner).
-- **net.test.js** — 19 tests: the API as a function — the endpoint index, the catalogues,
-  opening a game, `moves=turn|none|all`, an exchange with the AI answering, every way to
+- **net.test.js** — 20 tests: the API as a function — the endpoint index, the catalogues,
+  opening a game, the move view (`from,to,piece,san`, the king named as such),
+  `moves=turn|none|all`, an exchange with the AI answering, every way to
   send a move, every bad input, refusals (`409`), the AI seat playing n plies or all,
   hints, undo, resign, seats, the record, the rules text, the save round-trip, the game
   list, `max_games`, the TTL, unknown routes and verbs.

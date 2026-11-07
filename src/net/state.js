@@ -79,11 +79,16 @@ function capturesView(board, captured) {
   return captured.map((cap) => ({ square: squareOf(board, cap.i), piece: PIECE_NAMES[cap.value] }));
 }
 
-/** Legal moves of one side, in the notation a client sends back. */
+/**
+ * Legal moves of one side, in the notation a client sends back. `piece` names
+ * the man that moves, so a client can talk about "the king" without reading
+ * the board.
+ */
 function movesView(board, side) {
   return board.legalMoves(side).map((move) => ({
     from: squareOf(board, move.from),
     to: squareOf(board, move.to),
+    piece: PIECE_NAMES[board.at(move.from)],
     san: formatSan(board.size, move, 0),
   }));
 }

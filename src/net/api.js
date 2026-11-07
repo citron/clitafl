@@ -46,9 +46,12 @@ function apiIndex(store, version) {
     },
     notes: [
       'the game is public information: legal_moves lists every move of the side to move',
+      'a move is {from,to,piece,san}: piece is king | defender | attacker, san is what you post back',
+      'a reply carries `played`, the plies of the whole exchange: your move, then each AI seat in turn',
       'opening a game plays the opening ply when the opening seat is the AI; {"auto":false} keeps it for the caller',
       'a POST /moves reply plays every AI seat in turn, so one request covers one exchange',
       'the search is synchronous: a long time_ms blocks that one request, and is capped at 30 s',
+      'a failure is one readable sentence: {"error": "...", "status": n}, with 400, 404, 405, 409, 413',
     ],
     games_open: store.size,
   };

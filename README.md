@@ -24,7 +24,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 113 tests, node's built-in runner, no download needed
+npm test        # 114 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -129,6 +129,9 @@ Notes for a client:
 - A seat is `human`, `ai` or `agent`. `agent` (like `human`) is the caller's seat, so
   `POST /moves` answers for it and plays every AI seat in turn; asking the server to move
   an AI seat by hand is a `409`.
+- A reply carries `played` — the plies of the whole exchange: yours, then each AI seat.
+- A legal move is `{from, to, piece, san}`: `piece` is `king`, `defender` or `attacker`, and
+  `san` is the string you post back as `{"move": "d5-d6"}`.
 - Opening a game plays at most one opening ply, so an all-AI game is not played out by the
   request that opens it; `{"auto":false}` keeps even that for the caller.
 - `legal_moves` is the list for the side to move, an array. `?moves=all` makes it an object
@@ -249,7 +252,7 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-113 tests on `node:test` — no framework to install. They cover the historical armies and
+114 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant, movement, capture counts (open field, beside and on a
 castle, edge), siege sealing, apply/undo symmetry, save round-trips, repetition and
 ply-limit draws, the search (mate in one, escapes, time budget, depth monotonicity,

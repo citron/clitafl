@@ -7,7 +7,7 @@ engine, a search AI, an animated terminal renderer, a web board and an HTTP API 
 can drive. JavaScript on Node.js 20+, CommonJS, **no runtime dependencies**, no build step.
 
 ```
-113 tests · 18 source files + 3 web files · ~3 300 lines of engine, AI, UI, CLI and server
+114 tests · 18 source files + 3 web files · ~3 300 lines of engine, AI, UI, CLI and server
 ```
 
 ## Why version 2 exists
@@ -111,7 +111,7 @@ tests/         board · game · notation · ai · display · headless · cli · 
   hint, AI moves, undo, resign, save, an agent panel with the `curl` of the current game.
 - API: 17 JSON endpoints, self-describing, CORS open, a session store with slots and TTL,
   save-file round-trips, one message per error.
-- Tests: 113, all green, `npm test`, no dependencies.
+- Tests: 114, all green, `npm test`, no dependencies.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.
 
 ## Roadmap
