@@ -25,13 +25,14 @@ function playMatch(options = {}) {
   const game = options.game || Game.create(options.variant || 'tablut', options.size ?? null);
   const timeMs = options.timeMs ?? 60;
   const seed = options.seed ?? 1;
+  const maxNodes = options.maxNodes ?? 0;
   const levels = {
     [SIDE_ATTACKER]: options.attackerLevel || options.level || 'easy',
     [SIDE_DEFENDER]: options.defenderLevel || options.level || 'easy',
   };
   const players = {
-    [SIDE_ATTACKER]: new AIPlayer(levels[SIDE_ATTACKER], { timeMs, rng: seededRng(seed) }),
-    [SIDE_DEFENDER]: new AIPlayer(levels[SIDE_DEFENDER], { timeMs, rng: seededRng(seed + 7919) }),
+    [SIDE_ATTACKER]: new AIPlayer(levels[SIDE_ATTACKER], { timeMs, maxNodes, rng: seededRng(seed) }),
+    [SIDE_DEFENDER]: new AIPlayer(levels[SIDE_DEFENDER], { timeMs, maxNodes, rng: seededRng(seed + 7919) }),
   };
   const maxPlies = options.maxPlies ?? 500;
   const history = [];

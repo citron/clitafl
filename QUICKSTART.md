@@ -10,11 +10,12 @@ Node.js 20+. Nothing else — the game has no dependencies, so there is nothing 
 node src/index.js                 # tablut, you are the defender, the AI is medium
 node src/index.js play --human attacker --level easy
 node src/index.js play --variant brandub --human both   # two humans, one keyboard
+node src/index.js play --variant alea --level easy      # the 19x19 gospel game
 node src/index.js demo --variant copenhagen             # watch the AI play itself
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the suite.
+`npm start` does the same as the first line. `npm test` runs the 128 tests.
 
 ## Play in the browser
 
@@ -50,9 +51,10 @@ are all there.
 node src/index.js variants
 ```
 
-`tablut` (9×9), `copenhagen` (11×11), `brandub` (7×7), `ard-ri` (7×7), `tawlbwrdd` (11×11).
-`node src/index.js rules tablut` explains the one you chose, castles and capture counts included.
-`--size 13` builds a symmetric army on any odd board from 7 to 15.
+`tablut` (9×9), `copenhagen` (11×11), `brandub` (7×7), `ard-ri` (7×7), `alea` (19×19, the
+gospel game), `tawlbwrdd` (11×11). `node src/index.js rules tablut` explains the one you
+chose, castles and capture counts included. `--size 13` builds a symmetric army on any odd
+board from 7 to 19.
 
 ## Typing a move
 
@@ -82,6 +84,11 @@ node src/index.js play --level-a easy --level-d hard   # weak attackers, strong 
 node src/index.js play --time 5000                     # more thinking per move
 ```
 
+`hard` and `grandmaster` open from the prepared book (`src/ai/book.json`, made by
+`node tools/make-book.js`) and keep a transposition table between moves, so a long session
+gets stronger as it goes. `match` runs on a node budget (`maxNodes`), which is why the same
+seed always gives the same game.
+
 ## Plain terminal
 
 ```bash
@@ -94,7 +101,8 @@ Works on any terminal, and honours `NO_COLOR`.
 
 All pieces slide like a rook and never jump. A soldier is captured when two enemies sit on
 opposite sides of it; the board edge and empty castle squares can stand in for a captor
-where the variant says so. The defenders win when the king steps on an escape square
-(an edge, or a corner, depending on the game), the attackers when they take the king —
-the fetlar games also let them win by sealing the king and every defender in. Read the
-exact counts for the variant you play with `rules <name>`.
+where the variant says so. The defenders win when the king steps on an escape square (an
+edge, a corner, or the 16 marked squares of the alea evangelii), the attackers when they
+take the king — with 2, 3 or 4 men around him depending on the variant and on whether he
+stands beside or on a castle — and the fetlar games also let them win by sealing the king
+and every defender in. Read the exact counts for the variant you play with `rules <name>`.

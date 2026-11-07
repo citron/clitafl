@@ -8,7 +8,9 @@ const { Board } = require('../src/rules/board');
 const { getVariant, VARIANTS } = require('../src/rules/variants');
 const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../src/rules/pieces');
 const { AIPlayer, LEVELS, LEVEL_IDS, levelOf } = require('../src/ai/player');
-const { searchBestMove } = require('../src/ai/search');
+const { searchBestMove, captureMoves, createsCapture, TranspositionTable } = require('../src/ai/search');
+const { hashBoard, applyKey } = require('../src/ai/zobrist');
+const { bookMoves, loadBook } = require('../src/ai/book');
 const { evaluate, scoreFor, MATE } = require('../src/ai/evaluate');
 const { seededRng } = require('../src/headless');
 const { makeBoard, idx, move } = require('./helpers');
@@ -18,6 +20,14 @@ const gameFrom = (variantId, rows) => {
   const board = makeBoard(variantId, rows);
   return new Game(board.variant, board);
 };
+
+/** How many pieces the board really takes when the move is played. */
+function realCaptures(board, picked, side) {
+  const applied = board.applyMove(picked);
+  const count = applied.captured.length;
+  board.undoMove(picked, applied);
+  return count;
+}
 
 test('the known strength levels are ordered by thinking budget', () => {
   assert.deepEqual(LEVEL_IDS, ['easy', 'medium', 'hard', 'grandmaster']);
@@ -184,4 +194,122 @@ test('a seeded AI is reproducible, an unseeded one is not fixed', () => {
   const second = new AIPlayer('easy', { timeMs: 80, rng: seededRng(42) }).chooseMove(game).move;
   assert.deepEqual(first, second);
   assert.ok(LEVELS.easy.noise > 0, 'the easy level is allowed to vary its play');
+});
+
+test('the move ordering capture count matches the board for every legal move', () => {
+  const positions = [
+    [Board.fromVariant(getVariant('tablut')), SIDE_ATTACKER],
+    [Board.fromVariant(getVariant('copenhagen')), SIDE_DEFENDER],
+    [Board.fromVariant(getVariant('tawlbwrdd')), SIDE_ATTACKER],
+    [Board.fromVariant(getVariant('alea')), SIDE_ATTACKER],
+  ];
+  for (const [board, side] of positions) {
+    const moves = board.legalMoves(side);
+    assert.ok(moves.length > 20, `${board.variant.id} has moves to probe`);
+    for (const picked of moves) {
+      const real = realCaptures(board, picked, side);
+      assert.equal(
+        createsCapture(board, board.rowOf(picked.to), board.colOf(picked.to), side),
+        real > 0,
+        `${board.variant.id} ${picked.from}->${picked.to}: the board takes ${real}`,
+      );
+    }
+  }
+});
+
+test('the quiescence search follows only the moves that take a piece', () => {
+  const board = makeBoard('tablut', [
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '..A.DA...',
+    '.........',
+    '.........',
+    '.........',
+  ]);
+  const all = board.legalMoves(SIDE_ATTACKER);
+  const taking = all.filter((picked) => realCaptures(board, picked, SIDE_ATTACKER) > 0);
+  assert.deepEqual(
+    taking.map((picked) => `${picked.from}-${picked.to}`),
+    [`${idx(9, 5, 2)}-${idx(9, 5, 3)}`],
+    'only the count that closes the net on the duke takes',
+  );
+  const quiet = new Set(all.filter((picked) => realCaptures(board, picked, SIDE_ATTACKER) === 0)
+    .map((picked) => `${picked.from}-${picked.to}`));
+  const offered = captureMoves(board, SIDE_ATTACKER).filter((picked) => picked.order >= 1e5);
+  assert.deepEqual(
+    offered.map((picked) => `${picked.from}-${picked.to}`).sort(),
+    taking.map((picked) => `${picked.from}-${picked.to}`).sort(),
+    'exactly the capturing moves are offered',
+  );
+  assert.ok(!offered.some((picked) => quiet.has(`${picked.from}-${picked.to}`)), 'a quiet move is never followed');
+});
+
+test('the zobrist key follows the board as moves and captures are played', () => {
+  const game = Game.create('tablut');
+  const rng = seededRng(5);
+  let plies = 0;
+  while (plies < 40 && !game.isGameOver()) {
+    const side = game.turn;
+    const moves = game.board.legalMoves(side);
+    const picked = moves[Math.floor(rng() * moves.length)];
+    const key = hashBoard(game.board, side);
+    const piece = game.board.grid[picked.from];
+    const applied = game.board.applyMove(picked);
+    applyKey(key, piece, picked, applied.captured);
+    const next = side === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER;
+    assert.deepEqual(key, hashBoard(game.board, next), `ply ${plies}: the key tracks the board`);
+    game.board.undoMove(picked, applied);
+    game.play(picked);
+    plies += 1;
+  }
+  assert.equal(plies, 40, 'the key survives a long game');
+});
+
+test('a node budget makes the search reproducible and the table is reused', () => {
+  const board = Board.fromVariant(getVariant('copenhagen'));
+  const budget = { maxDepth: 8, timeMs: 60000, maxNodes: 40000 };
+  const one = searchBestMove(board, SIDE_ATTACKER, budget);
+  const two = searchBestMove(board, SIDE_ATTACKER, budget);
+  assert.ok(one.move, 'the search answers');
+  assert.ok(one.nodes >= 40000, `the node budget is spent, saw ${one.nodes}`);
+  assert.deepEqual(one.move, two.move, 'the same node budget gives the same move');
+  assert.equal(one.score, two.score, 'and the same score');
+
+  const table = new TranspositionTable();
+  searchBestMove(board, SIDE_ATTACKER, { ...budget, table });
+  const warm = searchBestMove(board, SIDE_ATTACKER, { ...budget, table });
+  assert.ok(warm.ttSize > 0, 'the transposition table keeps what the first search learned');
+  assert.ok(warm.move, 'the warm search still answers');
+});
+
+test('the opening book gives the strong levels a legal prepared opening', (t) => {
+  const book = loadBook();
+  if (!book) {
+    t.skip('no book.json yet: run node tools/make-book.js');
+    return;
+  }
+  assert.ok(book.positions > 100, `${book.positions} prepared positions`);
+  for (const id of ['brandub', 'copenhagen', 'tablut', 'alea']) {
+    const game = Game.create(id);
+    const list = bookMoves(game, game.turn);
+    assert.ok(list.length > 0, `${id} opens from the book`);
+    for (const picked of list) {
+      assert.equal(game.board.isLegalMove(picked.from, picked.to, game.turn), true, `${id} book move is legal`);
+    }
+  }
+  const hard = new AIPlayer('hard', {}).chooseMove(Game.create('tablut'));
+  assert.equal(hard.info.source, 'book', 'the hard level opens from the book');
+  const easy = new AIPlayer('easy', { timeMs: 30, rng: seededRng(3) }).chooseMove(Game.create('tablut'));
+  assert.notEqual(easy.info.source, 'book', 'the easy level still searches');
+
+  const late = Game.create('tablut');
+  const rng = seededRng(9);
+  while (late.ply <= book.maxPly && !late.isGameOver()) {
+    const moves = late.board.legalMoves(late.turn);
+    late.play(moves[Math.floor(rng() * moves.length)]);
+  }
+  assert.deepEqual(bookMoves(late, late.turn), [], 'the book is an opening book, not a tablebase');
 });

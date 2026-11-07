@@ -2,7 +2,7 @@
 
 const {
   KING, DEFENDER, ATTACKER, EMPTY,
-  SIDE_DEFENDER, SIDE_ATTACKER, isPiece, sideOf,
+  SIDE_DEFENDER, isPiece, sideOf,
 } = require('../rules/pieces');
 
 const MATE = 1000000;
@@ -27,12 +27,16 @@ function evaluate(board) {
   let score = 0;
   let defenderSpace = 0;
   let attackerSpace = 0;
+  let defenders = 0;
+  let attackers = 0;
 
   for (let i = 0; i < grid.length; i += 1) {
     const v = grid[i];
     if (!isPiece(v)) continue;
     const defender = sideOf(v) === SIDE_DEFENDER;
     score += defender ? MATERIAL[v] : -MATERIAL[v];
+    if (defender) defenders += 1;
+    else attackers += 1;
 
     const r = board.rowOf(i);
     const c = board.colOf(i);
@@ -47,7 +51,7 @@ function evaluate(board) {
     }
   }
 
-  score += (defenderSpace - attackerSpace) * 2;
+  score += (defenderSpace / Math.max(1, defenders) - attackerSpace / Math.max(1, attackers)) * 50;
 
   const escapeDist = minEscapeDistance(board, kr, kc);
   score += (size - escapeDist) * 14;
@@ -60,7 +64,7 @@ function evaluate(board) {
   }
 
   score += openLinesToEscape(board, kr, kc) * 55;
-  score += Math.max(0, board.countOf(SIDE_DEFENDER) - 3) * 5;
+  score += Math.max(0, defenders - 3) * 5;
   return score;
 }
 
@@ -83,6 +87,15 @@ function minEscapeDistance(board, r, c) {
       (last - r) + c,
       (last - r) + (last - c),
     );
+  }
+  if (board.variant.escape === 'cornerblock') {
+    // The exits are the four marked 2x2 blocks: a square is in one when both
+    // coordinates are within 1 of the nearest edge.
+    const nearTop = Math.max(0, r - 1);
+    const nearBottom = Math.max(0, last - 1 - r);
+    const nearLeft = Math.max(0, c - 1);
+    const nearRight = Math.max(0, last - 1 - c);
+    return Math.min(nearTop + nearLeft, nearTop + nearRight, nearBottom + nearLeft, nearBottom + nearRight);
   }
   return Math.min(r, c, last - r, last - c);
 }

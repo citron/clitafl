@@ -8,7 +8,8 @@ const { VARIANTS } = require('../src/rules/variants');
 const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../src/rules/pieces');
 const { playMatch, seededRng } = require('../src/headless');
 
-const FAST = { level: 'easy', timeMs: 15, seed: 3, maxPlies: 120 };
+// A node budget, not a clock: the matches in this suite must replay exactly.
+const FAST = { level: 'easy', timeMs: 15, maxNodes: 3000, seed: 3, maxPlies: 120 };
 
 test('the seeded random generator is reproducible and stays in range', () => {
   const a = seededRng(7);

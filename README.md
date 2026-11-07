@@ -1,8 +1,9 @@
 # Clitafl — the Tafl game of the Vikings
 
-A dependency-free implementation of the tafl family: five historical Viking/Celtic board
-games with one rules engine, a real game-tree AI, animations, saves, records and headless
-matches — in the terminal, in the browser, and over an HTTP API an agent can drive.
+A dependency-free implementation of the tafl family: six historical Viking/Celtic board
+games — from 7×7 brandub to the 19×19 alea evangelii — with one rules engine, a real
+game-tree AI, animations, saves, records and headless matches — in the terminal, in the
+browser, and over an HTTP API an agent can drive.
 
 Plain Node.js, **zero runtime dependencies** — no `npm install` step, no build step,
 nothing to break. The web client is HTML, CSS and vanilla JS talking to the same engine
@@ -11,7 +12,7 @@ through the API.
 ```bash
 node src/index.js          # play tablut against the AI
 node src/index.js serve    # the same game in a browser, plus the API
-node src/index.js variants # see the five armies
+node src/index.js variants # see the six armies
 ```
 
 ## Requirements
@@ -24,12 +25,12 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 114 tests, node's built-in runner, no download needed
+npm test        # 128 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
 
-## The five variants
+## The six variants
 
 | id | board | army | the king escapes to |
 | --- | --- | --- | --- |
@@ -37,14 +38,16 @@ npm test        # 114 tests, node's built-in runner, no download needed
 | `copenhagen` | 11×11 | king + 12 vs 24 | a corner |
 | `brandub` | 7×7 | king + 4 vs 8 | a corner |
 | `ard-ri` | 7×7 | king + 8 vs 16 | any edge square |
+| `alea` | 19×19 | king + 24 dukes vs 48 counts | the 16 marked corner squares |
 | `tawlbwrdd` | 11×11 | king + 12 vs 24 | any edge square |
 
 Every variant carries its own rule set in `src/rules/variants.js`: castle geometry
-(throne, corners, corners+edges), whether an empty castle captures, how many attackers
-are needed around the king in the open field / beside a castle / on a castle, whether the
-edge shields the king, the siege win, the no-legal-move rule and the repetition rule.
-The attackers always open. `--size` (odd, 7–15) rebuilds a symmetric position for any
-variant, so you are not limited to the historical boards.
+(throne, corners, the four marked 2×2 blocks), who may land on a castle, whether an empty
+castle captures, how many attackers are needed around the king in the open field / beside
+a castle / on a castle, whether the edge shields the king and whether the edge itself
+captures, the siege win, the no-legal-move rule and the repetition rule. The attackers
+always open. `--size` (odd, 7–19) rebuilds a symmetric position for any variant, so you
+are not limited to the historical boards.
 
 ## Commands
 
@@ -185,22 +188,37 @@ last move: e6-e7
 
 ## AI
 
-Negamax with alpha-beta pruning, iterative deepening, move ordering and a wall-clock
-budget. Captures are applied and undone in place on the live board, so a search node
-allocates nothing. Four strength presets set the depth ceiling, the budget and how much
-play is allowed to wander:
+Negamax with alpha-beta pruning, iterative deepening, a transposition table, killer moves,
+a capture-only quiescence search and a budget in milliseconds *or in nodes*. Captures are
+applied and undone in place on the live board, and the Zobrist key is updated in place, so
+a search node allocates nothing. Four strength presets set the depth ceiling, the budget
+and how much play is allowed to wander:
 
-| level | depth | budget | play |
+| level | depth ceiling | budget | play |
 | --- | --- | --- | --- |
 | `easy` | 2 | 120 ms | picks among the top 8 moves |
 | `medium` | 6 | 700 ms | top 2 moves |
-| `hard` | 12 | 2.5 s | best move |
-| `grandmaster` | 30 | 8 s | best move |
+| `hard` | 12 | 2.5 s | best move, opens from the book |
+| `grandmaster` | 30 | 8 s | best move, opens from the book |
+
+What that budget reaches from the opening, with the book off: `tablut` depth 4 (medium) to
+5 (grandmaster), `copenhagen` 3 to 4, `brandub` 5 to 7, `alea` 2 to 3 — 30 000 to
+90 000 nodes a second depending on the board. The quiescence search follows the moves that
+take a piece, so a snapshot evaluation never counts in the middle of an exchange.
 
 The evaluation is tafl-specific: material, king mobility, the distance of the king to its
-escape squares, open lines to the escape, freedom of both armies and the pressure the
-attackers build around the king. A seeded AI replays the same game, which is what makes
-`match` reproducible.
+escape squares (including the marked 2×2 blocks), open lines to the escape, freedom of both
+armies, space (per man, so the 19×19 board is not worth more than the 7×7 one) and the
+pressure the attackers build around the king.
+
+`src/ai/book.js` is a small opening book, `src/ai/book.json`: 411 prepared positions, 10
+plies deep, made by seeded self-play (`node tools/make-book.js`, deterministic). A book
+move is only a suggestion — it is checked against the legal moves before it is played — and
+`book: false` (or `bookData`) turns it off.
+
+A node budget (`maxNodes`) makes a search bit-reproducible: it stops on a count and never
+reads the clock. That is what a seeded `match` and the test suite run on; with a clock
+budget, the depth reached depends on the machine.
 
 ## Headless
 
@@ -216,8 +234,9 @@ console.log(match.status, match.reason, match.plies);
 console.log(match.history.map((h) => h.san).join(' '));
 ```
 
-Every variant plays out to a result at the low budgets used by the tests, and the same
-seed gives the same game.
+Every variant plays out to a result at the low budgets used by the tests, and the same seed
+gives the same game — ply for ply — because the matches run on a node budget. `maxNodes`
+is a `playMatch` option too.
 
 ## Layout
 
@@ -228,8 +247,11 @@ src/rules/board.js      geometry, movement, castles, custodian capture, siege fl
 src/rules/game.js       turns, victory/draw detection, undo, repetition, save/load
 src/rules/notation.js   d5-d6 parsing and formatting
 src/ai/evaluate.js      static evaluation
-src/ai/search.js        negamax + alpha-beta + iterative deepening
-src/ai/player.js        strength presets
+src/ai/zobrist.js       deterministic hash table, keys updated in place
+src/ai/search.js        negamax + alpha-beta + transposition table + killers + quiescence
+src/ai/book.js          the opening book, checked against the legal moves
+src/ai/book.json        411 prepared positions, 10 plies deep
+src/ai/player.js        strength presets, noise, book hook
 src/ui/ansi.js          ANSI/terminal control, NO_COLOR, alt screen
 src/ui/display.js       board, legend, banner, rules text, move animation
 src/cli/controller.js   one session: seats, turn loop, in-game commands, cleanup
@@ -240,6 +262,7 @@ src/net/api.js          the route table and the handlers, self-documenting
 src/net/server.js       node:http: static files, CORS, body cap, /api dispatch
 src/headless.js         AI vs AI without a terminal
 src/index.js            command line, including serve
+tools/make-book.js      the book generator, seeded and deterministic
 web/index.html          the board page
 web/style.css           its theme
 web/app.js              fetch calls, click-to-move, the agent command panel
@@ -252,32 +275,46 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-114 tests on `node:test` — no framework to install. They cover the historical armies and
-castle rules of each variant, movement, capture counts (open field, beside and on a
-castle, edge), siege sealing, apply/undo symmetry, save round-trips, repetition and
-ply-limit draws, the search (mate in one, escapes, time budget, depth monotonicity,
-legality in every variant), the renderer (glyphs, colour off, legend counts, animation
-never touching the real board), the CLI itself (flags, exit codes, records, scripted
-games), the API (every endpoint, every error path, seats, clocks, TTL, save round-trips)
-and the HTTP layer over a real socket (static files, traversal attempts, CORS, body cap,
-and the `serve` command of the CLI started as a child process).
+128 tests on `node:test` — no framework to install. They cover the historical armies and
+castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
+king capture, the marked squares capturing for both sides), movement, capture counts (open
+field, beside and on a castle, edge), siege sealing, apply/undo symmetry, save round-trips,
+repetition and ply-limit draws, the search (mate in one, escapes, time budget, depth
+monotonicity, capture prediction against the board for every legal move, quiescence
+following only captures, the Zobrist key over a 40-ply game, a node budget replaying
+itself, book moves being legal), the renderer (glyphs, colour off, legend counts, rules
+text, animation never touching the real board), the CLI itself (flags, exit codes,
+records, scripted games), the API (every endpoint, every error path, seats, clocks, TTL,
+save round-trips) and the HTTP layer over a real socket (static files, traversal attempts,
+CORS, body cap, and the `serve` command of the CLI started as a child process).
 
 ## Rules sources
 
 The rule sets follow the documented historical games: Linnaeus' 1732 account of tablut,
 the Fetlar/Copenhagen rules (aagenielsen.dk) for the 11×11 corner-escape family, and the
 Irish/Welsh reconstructions collected at tafl.cyningstan.com and Wikipedia's tafl article.
-Where the sources disagree (the tablut king capture count, the brandub setup) the variant
-file says which reading it implements. Brandub's and Ard Rí's starting positions are
+The alea evangelii follows the twelve rules copied next to the diagram in Cambridge, CCC
+MS 122 (c. 1140), as edited by D. Walker (tafl.cyningstan.com), with the army divided as
+H. J. R. Murray (1955) read the diagram; its starting colours are a documented
+reconstruction, as the manuscript draws every piece but four in one colour. Where the
+sources disagree (the tablut king capture count, the brandub setup) the variant file says
+which reading it implements. Brandub's and Ard Rí's starting positions are
 reconstructions, not originals.
+
+The alea evangelii is played as the sources describe it, and it is imbalanced: self-play at
+120 ms a move sees the attackers take the king in most games (3 of the 4 seeds tested, the
+fourth a king that reached a marked square). The manuscript's own marginal note complains
+about the same thing, and modern reconstructions are known to favour the attackers — the
+defenders start boxed in around a citadel they may not use.
 
 ## Roadmap
 
-- Alea evangelii (19×19) — needs a bigger search budget before it is fun.
-- Opening book and transposition table for `grandmaster`.
-- Quiescence search, so captures do not stop at the depth edge.
-- Push for the web client (WebSocket or SSE) instead of a request per ply, and games kept
+- Push for the web client (Server-Sent Events) instead of a request per ply, and games kept
   on disk so a server can restart without losing them.
+- A lobby: games that two named clients join by id, with a per-seat token.
+- Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.
+- `ard-ri` has 7×7 armies, and 7×7 boards only carry 8 attackers in the symmetric
+  generator: the setup for that variant is a documented reconstruction, not a source.
 
 ## License
 
