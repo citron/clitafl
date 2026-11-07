@@ -65,12 +65,19 @@
   colours off.
 - **store.js** — the open games: ids, seats (`human | ai | agent`), levels and per-seat
   clocks, `playAiPly`/`playAiSeats`, touch/TTL sweep, `maxGames` cap, seed and ply-limit
-  overrides, resume from a save file.
+  overrides, resume from a save file. It also carries the watchers: `subscribe(session,
+  sink)` / `publish(session, event, payload)` with a `maxWatchers` cap, a sink that throws
+  being dropped, and `announceClosed` before a game leaves the map. The sink is
+  `(event, payload)`: the store knows nothing about HTTP, the framing is the server's.
 - **api.js** — the route table and the handlers. `GET /api` describes every endpoint as
-  data, so a client can discover the game without reading a manual.
+  data, so a client can discover the game without reading a manual. One `announce` helper
+  is where a change is pushed: a `ply` event per move, then the `state`.
 - **server.js** — `node:http`: `/api/*` to the API, everything else as files from `web/`
   (resolve-then-check traversal guard), CORS, `OPTIONS`, a 1 MiB body cap, HEAD, JSON
-  errors, `serve` that reports the address it bound.
+  errors, `serve` that reports the address it bound. It owns the one route that is not a
+  JSON answer — `GET /api/games/<id>/events` — so `sseFrame` and `openEventStream` live
+  here: the state at once, every announced change, a `:ping` comment every 15 s, and the
+  watcher unsubscribed when the client goes.
 
 ## Top level
 
@@ -88,12 +95,14 @@
 ## `web/` — the browser client (no build step)
 
 - **index.html** — board panel, setup card (variant, size, seat, level, thinking time),
-  this-game card, the agent card with the `curl` commands of the current game, the rules,
-  the list of open games.
+  this-game card, the agent card with the `curl` commands of the current game — including
+  the one that watches it — the rules, the list of open games.
 - **style.css** — the theme: a wooden board, round pieces, castle/throne/escape marks,
   hint and last-move highlights, a responsive two-column layout.
 - **app.js** — one `fetch` per action: it renders exactly what the API sends, clicks
-  squares into moves from `legal_moves`, and never invents a rule of its own.
+  squares into moves from `legal_moves`, and never invents a rule of its own. It also
+  opens an `EventSource` on the game it shows, so a move played from a terminal, a script
+  or another tab lands on the board by itself, and says so when the game is closed.
 
 ## `tests/` — `node:test`, run with `npm test`
 
@@ -120,18 +129,23 @@
 - **cli.test.js** — 17 tests: flag parsing, seats, per-side levels, help text, and the real
   commands run in a child process (`variants`, `rules` for copenhagen, brandub and alea,
   `--version`, bad command, `match`, `--record`, scripted games, `--load`, `serve` flag
-  checks and its banner).
-- **net.test.js** — 21 tests: the API as a function — the endpoint index, the catalogues
+  checks — port, TTL, `--max-watchers` — and its banner).
+- **net.test.js** — 25 tests: the API as a function — the endpoint index, the catalogues
   (including a 19×19 alea evangelii game with its 16 exits and citadel), opening a game,
   the move view (`from,to,piece,san`, the king named as such), `moves=turn|none|all`, an
   exchange with the AI answering, every way to send a move, every bad input, refusals
   (`409`), the AI seat playing n plies or all, hints, undo, resign, seats, the record, the
   rules text, the save round-trip, the game list, `max_games`, the TTL, unknown routes and
-  verbs.
-- **server.test.js** — 10 tests: over a real socket — the page, CSS and JS, HEAD, traversal
+  verbs, and the push watchers: a `ply` per move and the state after it, a seat change
+  pushing and a hint not, the close on delete and on the TTL sweep, the watcher cap, and a
+  sink whose socket is gone being dropped.
+- **server.test.js** — 12 tests: over a real socket — the page, CSS and JS, HEAD, traversal
   probes, JSON over HTTP, CORS preflight, broken JSON, missing files, `405`, the body cap,
-  the game cap, `serve` on a free port, and the `serve` command of the CLI as a child
-  process, played over HTTP and stopped with SIGTERM.
+  the game cap, `serve` on a free port, the `serve` command of the CLI as a child process,
+  played over HTTP and stopped with SIGTERM, and the event stream read frame by frame: the
+  content type, the state it opens with, the `ply` and `state` a move produces, the `closed`
+  frame that ends the response, the `:ping` comment on a quiet game, the cap answered as a
+  `409`, and a client that hangs up stopping being a watcher.
 
 ## Docs
 

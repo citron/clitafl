@@ -82,6 +82,7 @@ class GameStore {
   constructor(options = {}) {
     this.maxGames = wholeNumber(options.maxGames ?? 50, 'maxGames');
     this.ttlMs = wholeNumber(options.ttlMs ?? 3 * 60 * 60 * 1000, 'ttlMs');
+    this.maxWatchers = wholeNumber(options.maxWatchers ?? 8, 'maxWatchers');
     this.defaultTimeMs = milliseconds(options.timeMs ?? null, 'timeMs');
     this.games = new Map();
   }
@@ -151,6 +152,7 @@ class GameStore {
 
   remove(id) {
     const session = this.get(id);
+    this.announceClosed(session);
     this.games.delete(session.id);
     return session;
   }
@@ -162,11 +164,52 @@ class GameStore {
     return session;
   }
 
+  /**
+   * Watch one game: `sink(event, payload)` is called for every change. Returns the
+   * unsubscribe, which must be called when the connection goes away. The store does
+   * not know about HTTP: the framing is the caller's (see `src/net/server.js`).
+   */
+  subscribe(session, sink) {
+    if (!session.watchers) session.watchers = new Set();
+    if (session.watchers.size >= this.maxWatchers && !session.watchers.has(sink)) {
+      throw E.conflict(`this game has ${session.watchers.size} watchers already: close one before watching it again`);
+    }
+    session.watchers.add(sink);
+    return () => {
+      if (session.watchers) session.watchers.delete(sink);
+    };
+  }
+
+  /** Tell everyone watching `session` that something happened. Returns how many heard. */
+  publish(session, event, payload) {
+    if (!session.watchers || session.watchers.size === 0) return 0;
+    let sent = 0;
+    for (const sink of [...session.watchers]) {
+      try {
+        sink(event, payload);
+        sent += 1;
+      } catch {
+        // a sink that throws is a dead connection: do not let it pile up
+        session.watchers.delete(sink);
+      }
+    }
+    return sent;
+  }
+
+  /** Tell the watchers of a game that is going away, before it leaves the map. */
+  announceClosed(session) {
+    this.publish(session, 'closed', { id: session.id, status: session.game.status, reason: session.game.reason });
+    if (session.watchers) session.watchers.clear();
+  }
+
   /** Forget games nobody has touched for `ttlMs`. */
   sweep(nowMs = Date.now()) {
     for (const [id, session] of [...this.games]) {
       const age = nowMs - Date.parse(session.updatedAt);
-      if (Number.isFinite(age) && age > this.ttlMs) this.games.delete(id);
+      if (Number.isFinite(age) && age > this.ttlMs) {
+        this.announceClosed(session);
+        this.games.delete(id);
+      }
     }
     return this.games.size;
   }

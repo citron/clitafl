@@ -472,3 +472,78 @@ test('a full exchange between the AI seats is a list of plies with captures desc
   assert.equal(state.moves_played, 1 + plies.length);
   assert.equal(state.last_move.san, plies[plies.length - 1].san);
 });
+
+test('the watchers of a game hear every change: a ply per move, the state, and the close', () => {
+  const store = makeStore();
+  const opened = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+  const session = store.get(opened.game.id);
+  const frames = [];
+  const stop = store.subscribe(session, (event, payload) => frames.push([event, payload]));
+
+  const move = opened.game.legal_moves[0];
+  req(store, 'POST', `/api/games/${session.id}/moves`, { body: { from: move.from, to: move.to } });
+  assert.deepEqual(frames.map(([event]) => event), ['ply', 'state'], 'one move, then the state');
+  assert.equal(frames[0][1].san, move.san, 'the ply carries the move that was played');
+  assert.equal(frames[0][1].seat, 'human');
+  assert.equal(frames[1][1].id, session.id, 'the state is the shape GET /api/games/:id gives');
+  assert.equal(frames[1][1].ply, 1);
+
+  req(store, 'POST', `/api/games/${session.id}/undo`, { body: {} });
+  assert.deepEqual(frames.map(([event]) => event), ['ply', 'state', 'state'], 'an undo pushes the state');
+
+  req(store, 'POST', `/api/games/${session.id}/seats`, { body: { seats: { attacker: 'ai', defender: 'human' } } });
+  req(store, 'POST', `/api/games/${session.id}/hint`, { body: {} });
+  const after = frames.map(([event]) => event);
+  assert.deepEqual(after.slice(3), ['state'], 'a seat change pushes, a hint does not');
+
+  req(store, 'DELETE', `/api/games/${session.id}`);
+  assert.equal(frames[frames.length - 1][0], 'closed', 'closing the game says so');
+  assert.equal(frames[frames.length - 1][1].id, session.id);
+  stop();
+});
+
+test('the events route is a stream: asked for JSON it explains itself, and a missing game is a 404', () => {
+  const store = makeStore();
+  const opened = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+  const index = req(store, 'GET', '/api').body;
+  assert.ok(
+    index.endpoints.some((row) => row.method === 'GET' && row.path === '/api/games/:id/events'),
+    'the stream is in the endpoint list',
+  );
+
+  const stream = req(store, 'GET', `/api/games/${opened.game.id}/events`);
+  assert.equal(stream.status, 400);
+  assert.match(stream.body.error, /stream/);
+  const verb = req(store, 'POST', `/api/games/${opened.game.id}/events`, { body: {} });
+  assert.equal(verb.status, 405);
+  assert.deepEqual(verb.body.allow, ['GET']);
+  const missing = req(store, 'GET', '/api/games/nope/events');
+  assert.equal(missing.status, 404);
+});
+
+test('a game bounds its watchers, and forgets a sink that cannot be written to', () => {
+  const store = makeStore({ maxWatchers: 2 });
+  const opened = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+  const session = store.get(opened.game.id);
+  const heard = [];
+  store.subscribe(session, (event) => heard.push(event));
+  store.subscribe(session, () => { throw new Error('socket gone'); });
+  assert.equal(store.publish(session, 'state', { id: session.id }), 1, 'only the live sink hears');
+  assert.equal(heard.join(','), 'state');
+  assert.equal(session.watchers.size, 1, 'the sink whose socket is gone is dropped');
+  store.subscribe(session, () => {});
+  assert.throws(() => store.subscribe(session, () => {}), /watchers/, 'the cap is enforced');
+  store.publish(session, 'state', { id: session.id });
+  assert.equal(heard.length, 2, 'and the dead sink does not pile up');
+});
+
+test('a game swept by the TTL tells its watchers before it goes', () => {
+  const store = makeStore({ ttlMs: 10 });
+  const opened = openGame(store, { seats: { attacker: 'human', defender: 'human' } });
+  const session = store.get(opened.game.id);
+  const frames = [];
+  store.subscribe(session, (event, payload) => frames.push([event, payload]));
+  store.sweep(Date.now() + 1000);
+  assert.deepEqual(frames, [['closed', { id: session.id, status: 'playing', reason: null }]]);
+  assert.equal(store.size, 0, 'and the slot is free');
+});

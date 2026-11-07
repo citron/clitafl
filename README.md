@@ -25,7 +25,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 128 tests, node's built-in runner, no download needed
+npm test        # 134 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -89,13 +89,15 @@ clitafl is serving
   api index  http://127.0.0.1:8080/api/health  health, open games, what the engine is
 
   open games 50 at a time, forgotten after 180 minutes without a request
+  watchers   8 connections may watch one game as it is played
 ```
 
 The board in `web/` is one page: variant, size, seat and level pickers, a click-to-move
 board with the castle / throne / escape marks, the record, and hint, AI moves, undo,
 resign, save and refresh. A seat set to *agent / client* is left to the outside world: the
 page shows the exact `curl` commands that drive it, which is how a script or an AI agent
-takes a seat over.
+takes a seat over. The page also *watches* the game it shows, so a move played from a
+terminal appears in the browser without a click.
 
 The API is the same game the CLI and the page play. `GET /api` describes it as data, so a
 client can discover it without reading this file.
@@ -111,6 +113,9 @@ curl -s localhost:8080/api/games/<id>
 # play a move: the AI answers in the same reply
 curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
   -d '{"from":"d5","to":"d4"}'
+
+# watch that game: one event per move, pushed as it happens
+curl -sN localhost:8080/api/games/<id>/events
 ```
 
 | endpoint | what it does |
@@ -125,6 +130,7 @@ curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: applicatio
 | `POST /api/games/:id/hint` | search a move without playing it |
 | `POST /api/games/:id/undo` · `/resign` · `/seats` | take plies back, resign, hand a seat to the AI |
 | `GET /api/games/:id/moves?since=n` · `/rules` · `/export` | the record, the rules, the save file |
+| `GET /api/games/:id/events` | the game as a Server-Sent Events stream (`text/event-stream`) |
 | `DELETE /api/games/:id` | close a game and free its slot |
 
 Notes for a client:
@@ -146,6 +152,11 @@ Notes for a client:
 - The save file from `/export` comes back as `POST /api/games {"load": …}`, so a game can
   leave the server and come back to it — that is also how the CLI's `--record` and `--load`
   files look.
+- `GET /api/games/:id/events` is that game pushed to you: an `event: state` to start, then
+  one `event: ply` per move — yours or another client's — with a `event: state` after it, and
+  `event: closed` when the game goes. `curl -sN` reads it, a browser uses `EventSource`, and
+  one game takes at most `--max-watchers` of them. Polling the state works as well: the
+  stream is a convenience, not a second protocol.
 
 Games live in memory: `--max-games` slots, least recently used ones forgotten after the
 `--ttl`. The server binds `127.0.0.1` by default — `--host 0.0.0.0` is how you put it on a
@@ -275,7 +286,7 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-128 tests on `node:test` — no framework to install. They cover the historical armies and
+134 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
 king capture, the marked squares capturing for both sides), movement, capture counts (open
 field, beside and on a castle, edge), siege sealing, apply/undo symmetry, save round-trips,
@@ -285,8 +296,9 @@ following only captures, the Zobrist key over a 40-ply game, a node budget repla
 itself, book moves being legal), the renderer (glyphs, colour off, legend counts, rules
 text, animation never touching the real board), the CLI itself (flags, exit codes,
 records, scripted games), the API (every endpoint, every error path, seats, clocks, TTL,
-save round-trips) and the HTTP layer over a real socket (static files, traversal attempts,
-CORS, body cap, and the `serve` command of the CLI started as a child process).
+save round-trips, the watchers of a game hearing every change), and the HTTP layer over a
+real socket (static files, traversal attempts, CORS, body cap, the event stream frame by
+frame, and the `serve` command of the CLI started as a child process).
 
 ## Rules sources
 
@@ -309,8 +321,7 @@ defenders start boxed in around a citadel they may not use.
 
 ## Roadmap
 
-- Push for the web client (Server-Sent Events) instead of a request per ply, and games kept
-  on disk so a server can restart without losing them.
+- Games kept on disk (`--state-dir`) so a server can restart without losing them.
 - A lobby: games that two named clients join by id, with a per-seat token.
 - Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.
 - `ard-ri` has 7×7 armies, and 7×7 boards only carry 8 attackers in the symmetric

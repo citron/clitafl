@@ -273,6 +273,10 @@ test('the server command checks its flags before it binds a port', () => {
   assert.equal(ttl.code, 2);
   assert.match(ttl.err, /--ttl expects a number/);
 
+  const watchers = run(['serve', '--max-watchers', 'zero']);
+  assert.equal(watchers.code, 2);
+  assert.match(watchers.err, /--max-watchers expects a number/);
+
   // A port somebody else holds: the answer is one line, with no stack trace.
   return withReservedPort((taken) => {
     const out = run(['serve', '--port', String(taken)]);

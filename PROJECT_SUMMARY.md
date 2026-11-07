@@ -8,7 +8,7 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-128 tests · 20 source files + 3 web files · ~3 900 lines of engine, AI, UI, CLI and server
+134 tests · 20 source files + 3 web files · ~3 900 lines of engine, AI, UI, CLI and server
 (~7 400 with the tests)
 ```
 
@@ -47,7 +47,7 @@ it over a socket, without adding a dependency.
 | need | now |
 | --- | --- |
 | no way to play outside a terminal | `clitafl serve` opens a board page on one port: click-to-move, six variants, sizes 7–19, seat and strength pickers, hint, undo, resign, save |
-| no way for a program to play | a JSON API: `GET /api` describes every endpoint, 17 routes cover open/read/move/hint/undo/resign/seats/record/rules/save/close |
+| no way for a program to play | a JSON API: `GET /api` describes every endpoint, 18 routes cover open/read/move/hint/undo/resign/seats/record/rules/save/watch/close |
 | an agent must guess the protocol | seats are `human`, `ai`, `agent`; `legal_moves` is the list for the side to move; a move reply carries the whole exchange, AI answer included; `400`/`404`/`405`/`409` are one readable sentence |
 | a web stack usually means a framework | the client is `web/index.html` + `style.css` + `app.js`, the server is `node:http` reading its own directory: nothing to install, nothing to build |
 | the server must not be a way to fill the disk | games live in memory with a slot cap (`--max-games`) and a TTL (`--ttl` minutes), the body is capped at 1 MiB, the thinking clock at 30 s, and the file server cannot leave `web/` |
@@ -66,6 +66,19 @@ and a search that could see through a capture.
 | the strong levels opened randomly | a seeded opening book (`src/ai/book.json`, 411 positions, 10 plies, `node tools/make-book.js`), each suggestion checked against the legal moves |
 | "reproducible" depended on how fast the machine was | a node budget (`maxNodes`): the search stops on a count and never reads the clock, so a seeded `match` replays ply for ply |
 | search nodes allocated move lists | killer moves per ply, capture counts predicted from the same `DIR_PAIRS` the board uses, and a test that compares the prediction with the board for every legal move of every variant |
+
+## Why version 2.3 exists
+
+The board in a browser was a page that had to ask for everything, and an agent driving the
+same game had no way to notice a move it did not make.
+
+| need | now |
+| --- | --- |
+| a web board that needed a request per ply | `GET /api/games/:id/events` is a Server-Sent Events stream: a `state` frame to start, a `ply` per move, a `state` after it, `closed` when the game goes |
+| a client polling the state to see what happened | the store keeps watchers per game and announces every change once — the CLI, the page and the API still share one semantics; a hint, a refused move and a bad request push nothing |
+| an open connection being free forever | one `EventSource` on the game the page shows, `maxWatchers` per game (a fourth connection is a plain `409`, asked before the headers go out), a `:ping` comment every 15 s, and the watcher unsubscribed when the client hangs up |
+| a stream the API cannot describe | the route is in the endpoint index, in the API notes, in the `serve` banner, in `GET /api/health` (`max_watchers`), and in `--max-watchers` |
+| framing leaking into the store | the sink is `(event, payload)`; the SSE framing (`sseFrame`, `openEventStream`) belongs to the HTTP layer, which owns the response |
 
 ## Design decisions
 
@@ -91,6 +104,10 @@ and a search that could see through a capture.
   mid-game (`POST /seats`) without a second kind of game state.
 - **The API is self-documenting.** `GET /api` returns the endpoint list, the seat kinds and
   the notes a client needs. A manual that ships as data cannot go out of date.
+- **Push is one call in one place.** The store announces a change, the HTTP layer frames it.
+  `announce()` is the only place a `ply` and a `state` are emitted, so a move played by the
+  CLI, the page or an agent looks the same from every side, and a stream that is not wanted
+  costs a `Set` lookup.
 - **A suggestion is not a rule.** A book move is checked against the legal moves, a missing
   book is not an error, and the client renders exactly what the API sends.
 - **Claims are checked by tests.** The historical armies, the king-capture counts, the
@@ -138,18 +155,19 @@ tests/         board · game · notation · ai · display · headless · cli · 
   book for the strong levels, four levels, seeded, and a node budget for reproducible
   matches; plays out every variant headlessly.
 - CLI: `play`, `demo`, `match`, `serve`, `variants`, `rules`, `help`; flags for seats,
-  strength, budget, size, seeds, scripts, saves, records, host, port, game slots, TTL,
-  plain-ASCII and colour-off.
+  strength, budget, size, seeds, scripts, saves, records, host, port, game slots, watchers
+  per game, TTL, plain-ASCII and colour-off.
 - Web: a board page served by the same process — click-to-move, seat pickers, record,
-  hint, AI moves, undo, resign, save, an agent panel with the `curl` of the current game.
-- API: 17 JSON endpoints, self-describing, CORS open, a session store with slots and TTL,
-  save-file round-trips, one message per error.
-- Tests: 128, all green, `npm test`, no dependencies.
+  hint, AI moves, undo, resign, save, an agent panel with the `curl` of the current game,
+  and a stream it watches so a move played elsewhere lands on the board by itself.
+- API: 18 JSON endpoints, self-describing, CORS open, a session store with slots, TTL and
+  watchers, a Server-Sent Events stream per game, save-file round-trips, one message per
+  error.
+- Tests: 134, all green, `npm test`, no dependencies.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.
 
 ## Roadmap
 
-- Push for the web client (Server-Sent Events) so a game does not need a request per ply.
 - Sessions kept on disk (`--state-dir`) so a server can restart without losing a game.
 - Pairing and lobby endpoints (two agents meeting on one server), with a token per seat.
 - Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.

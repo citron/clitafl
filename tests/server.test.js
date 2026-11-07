@@ -47,6 +47,62 @@ async function withApp(options, fn) {
   }
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function untilTrue(predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) await sleep(20);
+  return predicate();
+}
+
+/** The frames of an event-stream body, in order. Comment lines carry no event. */
+function parseSse(text) {
+  const frames = [];
+  for (const block of text.split('\n\n')) {
+    const event = /^event: (.+)$/m.exec(block);
+    const data = /^data: (.+)$/m.exec(block);
+    if (event && data) frames.push({ event: event[1], payload: JSON.parse(data[1]) });
+  }
+  return frames;
+}
+
+/**
+ * A live stream as a client reads it. The reader runs in the background, so
+ * `raw()` and `until(n)` see the frames as they arrive.
+ */
+function sseReader(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const seen = { raw: '', done: false };
+  const pump = async () => {
+    for (;;) {
+      const next = await reader.read();
+      if (next.value) seen.raw += decoder.decode(next.value, { stream: true });
+      if (next.done) {
+        seen.done = true;
+        break;
+      }
+    }
+  };
+  pump().catch(() => { seen.done = true; });
+
+  async function gather(keep, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && keep()) await sleep(10);
+    return parseSse(seen.raw);
+  }
+
+  return {
+    /** The frames so far, waiting up to `timeoutMs` for at least `count` of them. */
+    until: (count, timeoutMs = 5000) => gather(() => parseSse(seen.raw).length < count, timeoutMs),
+    /** Everything the server sends before it closes the response. */
+    drain: (timeoutMs = 1000) => gather(() => !seen.done, timeoutMs),
+    raw: () => seen.raw,
+    ended: () => seen.done,
+    hangUp: () => reader.cancel().catch(() => {}),
+  };
+}
+
 test('the web client is served, and a HEAD request carries the length without the body', async () => {
   await withApp({}, async (app) => {
     const page = await call(app, 'GET', '/');
@@ -204,6 +260,93 @@ test('serve listens where it is told and reports a usable url', async () => {
     if (typeof app.server.closeAllConnections === 'function') app.server.closeAllConnections();
     await new Promise((resolve) => app.server.close(resolve));
   }
+});
+
+test('the events route streams a game over a socket: the state, every ply, and the close', async () => {
+  await withApp({ keepAliveMs: 100 }, async (app) => {
+    const created = await call(app, 'POST', '/api/games', { seats: { attacker: 'human', defender: 'human' } });
+    assert.equal(created.status, 201);
+    const id = created.body.game.id;
+
+    const response = await fetch(`${app.url}/api/games/${id}/events`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/event-stream/);
+    assert.equal(response.headers.get('cache-control'), 'no-cache, no-transform');
+    assert.equal(response.headers.get('access-control-allow-origin'), '*', 'a page on another origin may watch');
+
+    const stream = sseReader(response);
+    const opening = await stream.until(1);
+    assert.equal(opening[0].event, 'state', 'the stream starts with the state');
+    assert.equal(opening[0].payload.id, id);
+    assert.equal(opening[0].payload.ply, 0);
+    assert.ok(opening[0].payload.legal_moves.length > 0, 'the state carries the legal moves');
+    assert.match(stream.raw(), /:clitafl events/, 'the stream says what it is');
+    assert.equal(app.store.get(id).watchers.size, 1, 'the connection owns one watcher');
+
+    const move = opening[0].payload.legal_moves[0];
+    await call(app, 'POST', `/api/games/${id}/moves`, { from: move.from, to: move.to });
+    const afterMove = await stream.until(3);
+    assert.deepEqual(afterMove.map((frame) => frame.event), ['state', 'ply', 'state'], 'the move lands as a ply, then the state');
+    assert.equal(afterMove[1].payload.san, move.san, 'the ply carries the move that was played');
+    assert.equal(afterMove[1].payload.seat, 'human');
+    assert.equal(afterMove[2].payload.ply, 1, 'the state carries the new ply');
+
+    await call(app, 'POST', `/api/games/${id}/resign`, {});
+    const over = await stream.until(4);
+    assert.equal(over[3].event, 'state');
+    assert.equal(over[3].payload.is_over, true);
+    assert.equal(over[3].payload.winner, 'attacker', 'the defenders resigned');
+
+    const closed = await call(app, 'DELETE', `/api/games/${id}`);
+    assert.equal(closed.status, 200);
+    const last = await stream.drain();
+    assert.equal(last[4].event, 'closed', 'the close is announced');
+    assert.equal(last[4].payload.id, id);
+    assert.ok(stream.ended(), 'the server ends the response after the close');
+  });
+});
+
+test('the stream refuses what it is not, keeps a quiet connection, and forgets a client that hangs up', async () => {
+  await withApp({ keepAliveMs: 100, maxWatchers: 1 }, async (app) => {
+    const created = await call(app, 'POST', '/api/games', { seats: { attacker: 'human', defender: 'human' } });
+    const id = created.body.game.id;
+
+    const index = await call(app, 'GET', '/api');
+    assert.ok(index.body.endpoints.some((row) => row.path === '/api/games/:id/events'), 'the stream is in the index over HTTP');
+
+    const post = await call(app, 'POST', `/api/games/${id}/events`, {});
+    assert.equal(post.status, 405);
+    assert.match(post.headers.get('allow'), /GET/);
+
+    const missing = await call(app, 'GET', '/api/games/nope/events');
+    assert.equal(missing.status, 404);
+    assert.match(missing.type, /application\/json/, 'a game that is not there is a normal JSON answer');
+    assert.match(missing.body.error, /nope/);
+
+    const response = await fetch(`${app.url}/api/games/${id}/events`);
+    const stream = sseReader(response);
+    await stream.until(1);
+    assert.equal(app.store.get(id).watchers.size, 1);
+
+    const crowded = await call(app, 'GET', `/api/games/${id}/events`);
+    assert.equal(crowded.status, 409, 'the watcher cap is answered as JSON');
+    assert.match(crowded.body.error, /watchers/);
+
+    assert.ok(await untilTrue(() => /:ping/.test(stream.raw()), 600),
+      'a quiet stream keeps the connection with a comment line');
+
+    await stream.hangUp();
+    assert.ok(await untilTrue(() => app.store.get(id).watchers.size === 0),
+      'a client that goes away stops being a watcher');
+
+    const second = await fetch(`${app.url}/api/games/${id}/events`);
+    const again = sseReader(second);
+    const state = await again.until(1);
+    assert.equal(state[0].payload.ply, 0, 'a new watcher gets the state from the start');
+    await again.hangUp();
+    assert.ok(await untilTrue(() => app.store.get(id).watchers.size === 0),
+      'and it is forgotten when it goes');
+  });
 });
 
 /** Read the child's stdout until it announces the port it bound. */

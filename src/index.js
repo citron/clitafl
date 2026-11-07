@@ -33,6 +33,7 @@ const OPTIONS = {
   port: { type: 'string' },
   host: { type: 'string' },
   'max-games': { type: 'string' },
+  'max-watchers': { type: 'string' },
   ttl: { type: 'string' },
   'no-color': { type: 'boolean' },
   color: { type: 'boolean' },
@@ -72,6 +73,7 @@ Options
       --port <n>            serve: TCP port (default 8080)
       --host <addr>         serve: interface to bind (default 127.0.0.1)
       --max-games <n>       serve: games kept open at once (default 50)
+      --max-watchers <n>    serve: connections watching one game (default 8)
       --ttl <minutes>       serve: forget a game untouched for that long (default 180)
       --ascii               plain ASCII glyphs, no unicode
       --no-color            disable ANSI colour (also honours NO_COLOR)
@@ -181,6 +183,7 @@ function serverBanner(started) {
     `  api index  ${url}/api/health  health, open games, what the engine is`,
     '',
     `  open games ${store.maxGames} at a time, forgotten after ${ttlMinutes} minutes without a request`,
+    `  watchers   ${store.maxWatchers} connections may watch one game as it is played`,
     `  client     ${root}`,
     '',
     '  open a game, play the defenders, and the AI answers in the same reply:',
@@ -190,6 +193,8 @@ function serverBanner(started) {
     '',
     `    curl -s ${url}/api/games/<id> -X POST -H 'content-type: application/json' \\`,
     `      -d '{"from":"d5","to":"d4"}'`,
+    '',
+    `    curl -sN ${url}/api/games/<id>/events   every move of that game, pushed as it happens`,
   ].join('\n');
 }
 
@@ -199,6 +204,7 @@ async function runServer(args) {
     host: args.host || '127.0.0.1',
     port: args.port === undefined ? 8080 : portNumber(args.port),
     maxGames: args['max-games'] ? num(args['max-games'], 'max-games') : undefined,
+    maxWatchers: args['max-watchers'] ? num(args['max-watchers'], 'max-watchers') : undefined,
     ttlMs: args.ttl ? Math.round(num(args.ttl, 'ttl') * 60000) : undefined,
     timeMs: args.time ? num(args.time, 'time') : undefined,
     version: readVersion(),

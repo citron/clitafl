@@ -6,8 +6,13 @@ const path = require('node:path');
 
 const { handleApi } = require('./api');
 const { GameStore } = require('./store');
+const S = require('./state');
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const KEEP_ALIVE_MS = 15000;
+
+/** `GET /api/games/<id>/events` — the one route the HTTP layer serves itself. */
+const EVENTS_PATH = /^\/api\/games\/([^/]+)\/events$/;
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -117,6 +122,42 @@ const CORS = {
   'access-control-max-age': '600',
 };
 
+/** One Server-Sent Events frame. */
+function sseFrame(event, payload) {
+  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+}
+
+/**
+ * Open the push stream of one game: the current state at once, then every change the
+ * store announces, and a comment line on a timer so a proxy keeps the connection.
+ * The response owns its watcher: it is unsubscribed when the client goes away.
+ */
+function openEventStream(res, store, session, keepAliveMs = KEEP_ALIVE_MS) {
+  // Take the watcher slot first: a crowded game answers as a normal 409, not as a
+  // stream that opens and then dies.
+  const stop = store.subscribe(session, (event, payload) => {
+    res.write(sseFrame(event, payload));
+    if (event === 'closed') res.end();
+  });
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+    ...CORS,
+  });
+  if (res.flushHeaders) res.flushHeaders();
+  res.write(':clitafl events\n\n');
+  res.write(sseFrame('state', S.gameView(session, { moves: 'turn' })));
+
+  const ping = setInterval(() => res.write(':ping\n\n'), keepAliveMs);
+  if (ping.unref) ping.unref();
+  res.on('close', () => {
+    clearInterval(ping);
+    stop();
+  });
+}
+
 /**
  * The HTTP app: `/api/*` goes to the JSON API, everything else is served from
  * `root` (the web client). Returns `{ handler, store }`; `createApp` wraps it in a server.
@@ -133,6 +174,24 @@ function createHandler(options = {}) {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, CORS);
       res.end();
+      return;
+    }
+
+    // The stream is not a JSON answer: the response object stays open, so the HTTP
+    // layer serves this route itself and hands the API only the lookup.
+    const watching = pathname.match(EVENTS_PATH);
+    if (watching) {
+      if (req.method !== 'GET') {
+        sendJson(res, 405,
+          { error: `${req.method} is not allowed on ${pathname}`, status: 405, allow: ['GET'] },
+          { ...CORS, allow: 'GET' });
+        return;
+      }
+      try {
+        openEventStream(res, store, store.get(decodeURIComponent(watching[1])), options.keepAliveMs ?? KEEP_ALIVE_MS);
+      } catch (error) {
+        sendJson(res, error.status || 404, { error: error.message, status: error.status || 404 }, CORS);
+      }
       return;
     }
 
@@ -218,4 +277,15 @@ function serve(options = {}) {
   });
 }
 
-module.exports = { createApp, createHandler, serve, staticFile, readJson, CORS, MAX_BODY_BYTES };
+module.exports = {
+  createApp,
+  createHandler,
+  serve,
+  staticFile,
+  readJson,
+  sseFrame,
+  openEventStream,
+  CORS,
+  MAX_BODY_BYTES,
+  KEEP_ALIVE_MS,
+};

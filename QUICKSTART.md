@@ -15,7 +15,7 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 128 tests.
+`npm start` does the same as the first line. `npm test` runs the 134 tests.
 
 ## Play in the browser
 
@@ -38,12 +38,18 @@ curl -s localhost:8080/api/games -X POST -H 'content-type: application/json' \
 curl -s localhost:8080/api/games/<id>                          # board, turn, legal moves
 curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
   -d '{"from":"d5","to":"d4"}'                                  # the AI answers in the reply
+curl -sN localhost:8080/api/games/<id>/events                   # every move, pushed as it happens
 ```
 
 `agent` is the seat you play from outside. The reply to a move carries the whole exchange
 — your ply and the AI's — plus the new state, so one request is one turn. `GET /api` lists
 the endpoints, `hint`, `undo`, `resign`, `seats`, the record, the rules and the save file
 are all there.
+
+`/events` is the same game pushed to you instead of asked for: a `state` frame to start,
+then a `ply` and a `state` for every move — whoever played it — and `closed` when the game
+goes. `curl -sN` reads it, a browser uses `EventSource`, and the board page watches the
+game it shows, so a move typed in a terminal shows up in the browser.
 
 ## Pick a game
 

@@ -38,6 +38,7 @@ function apiIndex(store, version) {
       { method: 'GET', path: '/api/games/:id/moves?since=ply', about: 'the record, from ply `since` on' },
       { method: 'GET', path: '/api/games/:id/rules', about: 'the rules of the variant being played' },
       { method: 'GET', path: '/api/games/:id/export', about: 'the save file of the game; POST it back as {load: ...} to resume' },
+      { method: 'GET', path: '/api/games/:id/events', about: 'a Server-Sent Events stream of the game: "ply" per move, then "state", and "closed" (text/event-stream)' },
       { method: 'DELETE', path: '/api/games/:id', about: 'close a game and free its slot' },
     ],
     seats: {
@@ -50,6 +51,7 @@ function apiIndex(store, version) {
       'a reply carries `played`, the plies of the whole exchange: your move, then each AI seat in turn',
       'opening a game plays the opening ply when the opening seat is the AI; {"auto":false} keeps it for the caller',
       'a POST /moves reply plays every AI seat in turn, so one request covers one exchange',
+      'GET /api/games/:id/events pushes that game as Server-Sent Events: "ply" per move, then "state"',
       'the search is synchronous: a long time_ms blocks that one request, and is capped at 30 s',
       'a failure is one readable sentence: {"error": "...", "status": n}, with 400, 404, 405, 409, 413',
     ],
@@ -105,6 +107,16 @@ function state(store, session, query = {}) {
   return S.gameView(session, { moves: moveOptions(query) });
 }
 
+/**
+ * The watchers of a game hear every change: one `ply` event per move played, then
+ * the state, in the same shape `GET /api/games/:id` gives. The framing (SSE) lives
+ * in `src/net/server.js`; this is the one place a change is announced.
+ */
+function announce(store, session, played = []) {
+  for (const ply of played) store.publish(session, 'ply', ply);
+  store.publish(session, 'state', S.gameView(session, { moves: 'turn' }));
+}
+
 function createGame(store, body, query) {
   const spec = { ...body };
   if (typeof spec.load === 'string') {
@@ -117,6 +129,7 @@ function createGame(store, body, query) {
   const session = store.create(spec);
   // One opening ply at most: an all-AI game must not be played out by the request that opens it.
   const played = spec.auto === false ? [] : store.playAiSeats(session, 1);
+  announce(store, session, played);
   return { status: 201, body: { ok: true, played, game: state(store, session, query) } };
 }
 
@@ -136,6 +149,7 @@ function playForClient(store, session, body, query) {
   const played = [store.plyRecord(session, result)];
   const auto = body.ai !== false && String(query.ai ?? 'true') !== 'false';
   if (auto) played.push(...store.playAiSeats(session));
+  announce(store, session, played);
   return { body: { ok: true, played, game: state(store, session, query) } };
 }
 
@@ -158,6 +172,7 @@ function playForAi(store, session, body) {
     if (session.game.isGameOver()) requirePlaying(session);
     throw E.conflict(`the ${session.game.turn} seat is played by the caller, not the AI: read a move from GET /api/games/${session.id} and send it to /moves`);
   }
+  announce(store, session, played);
   return { body: { ok: true, played, game: state(store, session) } };
 }
 
@@ -208,6 +223,7 @@ function changeSeats(store, session, body) {
       session.timeMs[side] = readTimeMs(perSide ?? body.time_ms, side === SIDE_ATTACKER ? 'time_ms_a' : 'time_ms_d');
     }
   }
+  announce(store, session);
   return { body: { ok: true, game: state(store, session) } };
 }
 
@@ -229,9 +245,10 @@ const ROUTES = [
       version: ctx.version,
       games_open: store.size,
       max_games: store.maxGames,
+      max_watchers: store.maxWatchers,
       variants: V.VARIANT_IDS,
       levels: LEVEL_IDS,
-      engine: 'negamax with alpha-beta, iterative deepening, time budget',
+      engine: 'negamax + alpha-beta, transposition table, killer moves, quiescence, opening book, time or node budget',
     },
   })],
   ['GET', 'variants', () => ({ body: { variants: V.describeVariants(), sizes: { min: V.MIN_SIZE, max: V.MAX_SIZE, odd: true } } })],
@@ -261,6 +278,7 @@ const ROUTES = [
     const plies = ctx.body.plies === undefined ? 1 : Number(ctx.body.plies);
     if (!Number.isInteger(plies) || plies < 1) throw E.badRequest(`plies expects a whole number >= 1, got '${ctx.body.plies}'`);
     const undone = session.game.undo(plies);
+    announce(store, session);
     return { body: { ok: true, undone, game: state(store, session) } };
   }],
   ['POST', 'games/:id/resign', (store, ctx) => {
@@ -268,6 +286,7 @@ const ROUTES = [
     requirePlaying(session);
     const side = ctx.body.side ? sideName(ctx.body.side) : session.game.turn;
     session.game.resign(side);
+    announce(store, session);
     return { body: { ok: true, game: state(store, session) } };
   }],
   ['POST', 'games/:id/seats', (store, ctx) => changeSeats(store, store.get(ctx.params.id), ctx.body)],
@@ -277,6 +296,13 @@ const ROUTES = [
     return { body: { variant: S.variantView(session.game.variant), rules_text: S.rulesText(session.game.variant) } };
   }],
   ['GET', 'games/:id/export', (store, ctx) => ({ body: store.get(ctx.params.id).game.serialize() })],
+  // The stream is served by the HTTP layer (it owns the response object). The route is
+  // declared here so the router knows it, `GET /api/games/:id/events` over a socket
+  // answers as text/event-stream, and a caller who reaches this handler is told why not.
+  ['GET', 'games/:id/events', (store, ctx) => {
+    store.get(ctx.params.id);
+    throw E.badRequest('the events route is a stream: GET it over HTTP and read the text/event-stream body');
+  }],
 ];
 
 function getVariantOrThrow(id, size) {

@@ -40,6 +40,7 @@ const state = {
   movesOfSelected: [],
   hint: null,
   busy: false,
+  events: null,
 };
 
 const elements = {};
@@ -51,7 +52,7 @@ function cacheElements() {
     'btn-new', 'btn-swap', 'btn-hint', 'btn-ai', 'btn-undo', 'btn-resign', 'btn-export',
     'btn-refresh', 'btn-games', 'btn-copy', 'games', 'rules-text', 'rules-title',
     'meta-id', 'meta-ply', 'meta-moves', 'meta-ai', 'levels-note', 'version',
-    'cmd-create', 'cmd-state', 'cmd-move', 'cmd-index',
+    'cmd-create', 'cmd-state', 'cmd-move', 'cmd-watch', 'cmd-index',
   ].forEach((id) => { elements[id] = $(id); });
 }
 
@@ -294,6 +295,7 @@ function renderCommands() {
   elements['cmd-create'].value = `curl -s ${base}/api/games -X POST -H 'content-type: application/json' \\\n  -d '${body}'`;
   elements['cmd-state'].value = `curl -s ${base}/api/games/${id}`;
   elements['cmd-move'].value = `curl -s ${base}/api/games/${id}/moves -X POST -H 'content-type: application/json' \\\n  -d '{"from":"${legal.from}","to":"${legal.to}"}'`;
+  elements['cmd-watch'].value = `curl -sN ${base}/api/games/${id}/events`;
   elements['cmd-index'].value = `curl -s ${base}/api`;
 }
 
@@ -307,11 +309,44 @@ function render() {
 /* ---------- playing ---------- */
 
 function setGame(game) {
+  const opened = !state.game || state.game.id !== game.id;
   state.game = game;
   state.selected = null;
   state.movesOfSelected = [];
   state.hint = null;
   render();
+  if (opened) watchGame(game.id);
+}
+
+/* ---------- the push stream ---------- */
+
+/* One EventSource per game being shown: the server pushes a `ply` for every move
+ * played anywhere, then the state, and says `closed` when the game goes away. The
+ * buttons keep working without it — the stream is a convenience, not a protocol. */
+function watchGame(id) {
+  if (state.events) {
+    state.events.close();
+    state.events = null;
+  }
+  if (!id || !window.EventSource) return;
+  const source = new EventSource(`/api/games/${id}/events`);
+  state.events = source;
+  source.addEventListener('state', (event) => {
+    const game = JSON.parse(event.data);
+    if (state.game && game.id !== state.game.id) return;
+    setGame(game);
+  });
+  source.addEventListener('ply', (event) => {
+    describePlayed([JSON.parse(event.data)]);
+  });
+  source.addEventListener('closed', () => {
+    if (state.events === source) {
+      source.close();
+      state.events = null;
+    }
+    setMessage('that game was closed on the server', 'bad');
+  });
+  source.addEventListener('error', () => { /* EventSource reconnects on its own */ });
 }
 
 function seatOfTurn() {
@@ -512,7 +547,7 @@ function wire() {
     if (button) act('loading that game…', () => openGame(button.dataset.id));
   });
   elements['btn-copy'].addEventListener('click', async () => {
-    const areas = [elements['cmd-create'], elements['cmd-state'], elements['cmd-move']];
+    const areas = [elements['cmd-create'], elements['cmd-state'], elements['cmd-move'], elements['cmd-watch']];
     const text = areas.map((area) => area.value).join('\n\n');
     try {
       await navigator.clipboard.writeText(text);
