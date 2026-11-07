@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clitafl — the Tafl game of the Vikings</title>
+<meta name="description" content="Hnefatafl / Tafl in the browser: five historical variants, a search AI, and an HTTP API for agents.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231b1410'/><text x='16' y='23' font-size='18' text-anchor='middle' fill='%23e8c07d'>♞</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <h1>clitafl</h1>
+  <p class="tagline">Tafl in the browser — five historical variants, a search AI, an API for agents</p>
+  <nav class="topnav">
+    <a href="#play">board</a>
+    <a href="#setup">new game</a>
+    <a href="#agent">agent</a>
+    <a href="#rules">rules</a>
+  </nav>
+</header>
+
+<main>
+  <section id="play" class="board-panel">
+    <div class="statusbar">
+      <span id="variant-name" class="variant-name">Tablut</span>
+      <span id="turn" class="turn"></span>
+      <span id="counts" class="counts"></span>
+      <span id="status" class="status"></span>
+    </div>
+
+    <div id="board" class="board" role="grid" aria-label="tafl board"></div>
+
+    <div class="underboard">
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <div class="actions">
+        <button type="button" id="btn-hint" title="search a move without playing it">hint</button>
+        <button type="button" id="btn-ai" title="let the AI seats play">AI moves</button>
+        <button type="button" id="btn-undo" title="take back one ply">undo</button>
+        <button type="button" id="btn-resign" title="resign for the side to move">resign</button>
+        <button type="button" id="btn-export" title="download the save file">save</button>
+        <button type="button" id="btn-refresh" title="reload the state from the server">refresh</button>
+      </div>
+    </div>
+
+    <section class="record">
+      <h2>record</h2>
+      <ol id="history" class="history"></ol>
+    </section>
+  </section>
+
+  <aside class="side">
+    <section id="setup" class="card">
+      <h2>new game</h2>
+      <label class="field">
+        <span>variant</span>
+        <select id="variant"></select>
+      </label>
+      <label class="field">
+        <span>board size</span>
+        <select id="size"></select>
+      </label>
+      <div class="seat-grid">
+        <div class="seat-col">
+          <h3>attackers</h3>
+          <label class="field">
+            <span>seat</span>
+            <select id="seat-a">
+              <option value="human">you</option>
+              <option value="ai">AI</option>
+              <option value="agent">agent / client</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>AI strength</span>
+            <select id="level-a"></select>
+          </label>
+        </div>
+        <div class="seat-col">
+          <h3>defenders</h3>
+          <label class="field">
+            <span>seat</span>
+            <select id="seat-d">
+              <option value="ai">AI</option>
+              <option value="human" selected>you</option>
+              <option value="agent">agent / client</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>AI strength</span>
+            <select id="level-d"></select>
+          </label>
+        </div>
+      </div>
+      <label class="field">
+        <span>thinking time per AI move</span>
+        <select id="time">
+          <option value="50">50 ms — fastest play</option>
+          <option value="120">120 ms</option>
+          <option value="300" selected>300 ms</option>
+          <option value="800">800 ms</option>
+          <option value="2000">2 s — strong</option>
+          <option value="5000">5 s — patient</option>
+        </select>
+      </label>
+      <div class="actions">
+        <button type="button" id="btn-new" class="primary">new game</button>
+        <button type="button" id="btn-swap" title="swap the seats">swap seats</button>
+      </div>
+      <p class="hint-text" id="levels-note"></p>
+    </section>
+
+    <section class="card">
+      <h2>this game</h2>
+      <dl class="meta">
+        <dt>id</dt><dd id="meta-id">—</dd>
+        <dt>ply</dt><dd id="meta-ply">0</dd>
+        <dt>legal moves</dt><dd id="meta-moves">0</dd>
+        <dt>AI last move</dt><dd id="meta-ai">—</dd>
+      </dl>
+      <p class="hint-text">a seat marked <code>agent / client</code> is played from outside the browser: the
+        <a href="#agent">API calls</a> below drive it.</p>
+    </section>
+
+    <section id="agent" class="card">
+      <h2>play it from a terminal, script, or agent</h2>
+      <p class="hint-text">every game is plain JSON over HTTP. Copy these as they are — they match the board above.</p>
+      <label class="field">
+        <span>open a game like this one</span>
+        <textarea id="cmd-create" rows="4" readonly spellcheck="false"></textarea>
+      </label>
+      <label class="field">
+        <span>read the state (board, turn, legal moves)</span>
+        <textarea id="cmd-state" rows="2" readonly spellcheck="false"></textarea>
+      </label>
+      <label class="field">
+        <span>play a move</span>
+        <textarea id="cmd-move" rows="3" readonly spellcheck="false"></textarea>
+      </label>
+      <label class="field">
+        <span>all endpoints</span>
+        <textarea id="cmd-index" rows="2" readonly spellcheck="false"></textarea>
+      </label>
+      <div class="actions">
+        <button type="button" id="btn-copy" title="copy the selected command">copy</button>
+      </div>
+    </section>
+
+    <section id="rules" class="card">
+      <h2 id="rules-title">rules</h2>
+      <pre id="rules-text" class="rules-text">loading…</pre>
+    </section>
+
+    <section class="card">
+      <h2>open games on this server</h2>
+      <ul id="games" class="games"></ul>
+      <div class="actions">
+        <button type="button" id="btn-games" title="reload the list">reload</button>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <p>clitafl — CLI, web board and API in one dependency-free Node package.
+    <span id="version"></span></p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

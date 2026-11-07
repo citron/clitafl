@@ -1,25 +1,30 @@
 # Clitafl — the Tafl game of the Vikings
 
-A terminal implementation of the tafl family: five historical Viking/Celtic board games
-with one rules engine, a real game-tree AI, animations, saves, records and headless matches.
+A dependency-free implementation of the tafl family: five historical Viking/Celtic board
+games with one rules engine, a real game-tree AI, animations, saves, records and headless
+matches — in the terminal, in the browser, and over an HTTP API an agent can drive.
 
-Plain Node.js, **zero runtime dependencies** — no `npm install` step, nothing to break.
+Plain Node.js, **zero runtime dependencies** — no `npm install` step, no build step,
+nothing to break. The web client is HTML, CSS and vanilla JS talking to the same engine
+through the API.
 
 ```bash
 node src/index.js          # play tablut against the AI
+node src/index.js serve    # the same game in a browser, plus the API
 node src/index.js variants # see the five armies
 ```
 
 ## Requirements
 
-Node.js 20 or newer (tested on Node 24). That is all: the CLI uses only `node:util`,
-`node:readline/promises` and its own ANSI writer.
+Node.js 20 or newer (tested on Node 24). The CLI uses `node:util`, `node:readline/promises`
+and its own ANSI writer; the server adds `node:http`, `node:fs` and `node:crypto`. No
+framework, no bundler.
 
 ## Install
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 83 tests, node's built-in runner, no download needed
+npm test        # 113 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -47,6 +52,7 @@ variant, so you are not limited to the historical boards.
 node src/index.js play --variant copenhagen --human defender --level hard
 node src/index.js demo --variant brandub                 # animated AI vs AI
 node src/index.js match --variant tablut --seed 3 --time 40 --record game.json
+node src/index.js serve --port 8080                      # web board + API
 node src/index.js variants
 node src/index.js rules ard-ri
 node src/index.js help
@@ -57,6 +63,87 @@ Useful flags: `--size 11`, `--human attacker|defender|both|none`, `--level easy|
 scripted game, `--load <file>` to resume, `--record <file>` to write the record,
 `--seed <n>` for reproducible matches, `--max-plies <n>`, `--fps <ms>`,
 `--ascii`, `--no-color` (also honours `NO_COLOR`), `--no-animation`.
+
+For `serve`: `--port <n>` (0 asks the operating system for a free one), `--host <addr>`
+(default `127.0.0.1`), `--max-games <n>` (default 50), `--ttl <minutes>` — how long a game
+nobody touches is kept (default 180), `--time <ms>` — the default thinking budget. Ctrl-c
+closes the server and exits 0.
+
+## Web board and API
+
+```bash
+npm run serve                    # http://127.0.0.1:8080
+node src/index.js serve --port 0 # any free port, printed in the banner
+```
+
+The banner prints everything a player — or an agent — needs:
+
+```
+clitafl is serving
+
+  board      http://127.0.0.1:8080/            the web client, click to move
+  api        http://127.0.0.1:8080/api         the endpoints, described as JSON
+  api index  http://127.0.0.1:8080/api/health  health, open games, what the engine is
+
+  open games 50 at a time, forgotten after 180 minutes without a request
+```
+
+The board in `web/` is one page: variant, size, seat and level pickers, a click-to-move
+board with the castle / throne / escape marks, the record, and hint, AI moves, undo,
+resign, save and refresh. A seat set to *agent / client* is left to the outside world: the
+page shows the exact `curl` commands that drive it, which is how a script or an AI agent
+takes a seat over.
+
+The API is the same game the CLI and the page play. `GET /api` describes it as data, so a
+client can discover it without reading this file.
+
+```bash
+# open a game: the AI plays the attackers, the caller plays the defenders
+curl -s localhost:8080/api/games -X POST -H 'content-type: application/json' \
+  -d '{"variant":"tablut","seats":{"attacker":"ai","defender":"agent"},"levels":"hard"}'
+
+# read it: board, turn, legal moves of the side to move
+curl -s localhost:8080/api/games/<id>
+
+# play a move: the AI answers in the same reply
+curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
+  -d '{"from":"d5","to":"d4"}'
+```
+
+| endpoint | what it does |
+| --- | --- |
+| `GET /api/health` | version, open games, variants, levels, engine |
+| `GET /api/variants` · `GET /api/variants/:id?size=11` | the armies, and the rules as text |
+| `GET /api/levels` | the strength presets with their depth and budget |
+| `GET /api/games` · `POST /api/games` | list / open (`?include=closed` lists finished ones) |
+| `GET /api/games/:id?moves=turn\|none\|all` | full state: board, turn, legal moves, record |
+| `POST /api/games/:id/moves` | play `{from,to}` (or `{move:"d5-d6"}`), `?ai=false` silences the AI seats |
+| `POST /api/games/:id/ai` | let the AI seats play `{moves:n}` plies, or `{moves:"all"}` |
+| `POST /api/games/:id/hint` | search a move without playing it |
+| `POST /api/games/:id/undo` · `/resign` · `/seats` | take plies back, resign, hand a seat to the AI |
+| `GET /api/games/:id/moves?since=n` · `/rules` · `/export` | the record, the rules, the save file |
+| `DELETE /api/games/:id` | close a game and free its slot |
+
+Notes for a client:
+
+- A seat is `human`, `ai` or `agent`. `agent` (like `human`) is the caller's seat, so
+  `POST /moves` answers for it and plays every AI seat in turn; asking the server to move
+  an AI seat by hand is a `409`.
+- Opening a game plays at most one opening ply, so an all-AI game is not played out by the
+  request that opens it; `{"auto":false}` keeps even that for the caller.
+- `legal_moves` is the list for the side to move, an array. `?moves=all` makes it an object
+  keyed by side, `?moves=none` makes it empty.
+- `time_ms` (and `time_ms_a` / `time_ms_d`) is capped at 30 s, because the search runs
+  inside the request.
+- Bad input is a `400` with one readable sentence, a game that is over is a `409`, a route
+  that does not exist is a `404` with a hint, and CORS is open (`OPTIONS` → 204).
+- The save file from `/export` comes back as `POST /api/games {"load": …}`, so a game can
+  leave the server and come back to it — that is also how the CLI's `--record` and `--load`
+  files look.
+
+Games live in memory: `--max-games` slots, least recently used ones forgotten after the
+`--ttl`. The server binds `127.0.0.1` by default — `--host 0.0.0.0` is how you put it on a
+network, and there is no authentication, so do that only where you mean it.
 
 ## Playing
 
@@ -143,9 +230,17 @@ src/ai/player.js        strength presets
 src/ui/ansi.js          ANSI/terminal control, NO_COLOR, alt screen
 src/ui/display.js       board, legend, banner, rules text, move animation
 src/cli/controller.js   one session: seats, turn loop, in-game commands, cleanup
+src/net/errors.js       ApiError and the status helpers: 400, 404, 405, 409, 413
+src/net/state.js        the public JSON view of a game: board, moves, record, rules text
+src/net/store.js        sessions, seats, levels, clocks, TTL, max games
+src/net/api.js          the route table and the handlers, self-documenting
+src/net/server.js       node:http: static files, CORS, body cap, /api dispatch
 src/headless.js         AI vs AI without a terminal
-src/index.js            command line
-tests/                  node:test suites: rules, board, notation, AI, display, headless, CLI
+src/index.js            command line, including serve
+web/index.html          the board page
+web/style.css           its theme
+web/app.js              fetch calls, click-to-move, the agent command panel
+tests/                  node:test suites: rules, board, notation, AI, display, headless, CLI, net, server
 ```
 
 ## Tests
@@ -154,13 +249,15 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-83 tests on `node:test` — no framework to install. They cover the historical armies and
+113 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant, movement, capture counts (open field, beside and on a
 castle, edge), siege sealing, apply/undo symmetry, save round-trips, repetition and
 ply-limit draws, the search (mate in one, escapes, time budget, depth monotonicity,
 legality in every variant), the renderer (glyphs, colour off, legend counts, animation
-never touching the real board) and the CLI itself (flags, exit codes, records, scripted
-games).
+never touching the real board), the CLI itself (flags, exit codes, records, scripted
+games), the API (every endpoint, every error path, seats, clocks, TTL, save round-trips)
+and the HTTP layer over a real socket (static files, traversal attempts, CORS, body cap,
+and the `serve` command of the CLI started as a child process).
 
 ## Rules sources
 
@@ -175,7 +272,9 @@ reconstructions, not originals.
 
 - Alea evangelii (19×19) — needs a bigger search budget before it is fun.
 - Opening book and transposition table for `grandmaster`.
-- Online / two-machine play.
+- Quiescence search, so captures do not stop at the depth edge.
+- Push for the web client (WebSocket or SSE) instead of a request per ply, and games kept
+  on disk so a server can restart without losing them.
 
 ## License
 

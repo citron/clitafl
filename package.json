@@ -1,7 +1,7 @@
 {
   "name": "clitafl",
-  "version": "2.0.0",
-  "description": "The ultimate Tafl game in your terminal: five historical Viking board games (tablut, copenhagen, brandub, ard-ri, tawlbwrdd) with a search AI, animations and a full CLI.",
+  "version": "2.1.0",
+  "description": "The ultimate Tafl game: five historical Viking board games (tablut, copenhagen, brandub, ard-ri, tawlbwrdd) with a search AI, in the terminal, in the browser, and over an HTTP API for agents.",
   "main": "src/index.js",
   "bin": {
     "clitafl": "./src/index.js",
@@ -12,6 +12,7 @@
     "start": "node src/index.js play",
     "demo": "node src/index.js demo",
     "match": "node src/index.js match",
+    "serve": "node src/index.js serve",
     "variants": "node src/index.js variants"
   },
   "keywords": [
@@ -26,6 +27,8 @@
     "strategy",
     "ai",
     "negamax",
+    "web-game",
+    "http-api",
     "node"
   ],
   "author": "William Gacquer",
@@ -38,6 +41,7 @@
   },
   "files": [
     "src/",
+    "web/",
     "README.md",
     "QUICKSTART.md",
     "FILES.md",

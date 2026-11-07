@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, spawn } = require('node:child_process');
 
 const { parseCli, seatsFrom, usage, COMMANDS } = require('../src/index');
 const { Game } = require('../src/rules/game');
@@ -73,7 +73,7 @@ test('the two sides can think at different strengths', () => {
 test('the help text lists every command and flag players need', () => {
   const text = usage();
   for (const command of COMMANDS) assert.ok(text.includes(command), `help mentions ${command}`);
-  for (const flag of ['--variant', '--size', '--human', '--level', '--time', '--moves', '--load', '--record', '--seed', '--ascii', '--no-color']) {
+  for (const flag of ['--variant', '--size', '--human', '--level', '--time', '--moves', '--load', '--record', '--seed', '--ascii', '--no-color', '--port', '--host', '--max-games', '--ttl']) {
     assert.ok(text.includes(flag), `help mentions ${flag}`);
   }
   for (const id of VARIANT_IDS) assert.ok(text.includes(id), `help mentions the ${id} variant`);
@@ -217,3 +217,57 @@ test('a session started from a save file resumes where it stopped', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * Bind a port in a child process, hand it to `fn` along with the way to free
+ * it again, so the CLI can be told to take a port that is in use.
+ */
+function withReservedPort(fn) {
+  const probe = [
+    'const s = require(\'node:http\').createServer();',
+    's.listen(0, \'127.0.0.1\', () => process.stdout.write(s.address().port + String.fromCharCode(10)));',
+  ].join(' ');
+  const child = spawn(process.execPath, ['-e', probe], { cwd: ROOT, encoding: 'utf8' });
+
+  const started = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('the port probe never answered'));
+    }, 8000);
+    child.stdout.once('data', (chunk) => {
+      clearTimeout(timer);
+      resolve(Number(String(chunk).trim()));
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+
+  return started
+    .then((port) => fn(port))
+    .finally(() => child.kill('SIGKILL'));
+}
+
+test('the server command checks its flags before it binds a port', () => {
+  const port = run(['serve', '--port', 'castle']);
+  assert.equal(port.code, 2);
+  assert.match(port.err, /--port expects a number/);
+
+  const outOfRange = run(['serve', '--port', '99999']);
+  assert.equal(outOfRange.code, 2);
+  assert.match(outOfRange.err, /TCP port 0-65535/);
+
+  const ttl = run(['serve', '--ttl', 'never']);
+  assert.equal(ttl.code, 2);
+  assert.match(ttl.err, /--ttl expects a number/);
+
+  // A port somebody else holds: the answer is one line, with no stack trace.
+  return withReservedPort((taken) => {
+    const out = run(['serve', '--port', String(taken)]);
+    assert.equal(out.code, 2);
+    assert.match(out.err, /EADDRINUSE/, 'a port in use is a message, not a stack trace');
+    assert.ok(!out.err.includes('    at '), out.err);
+  });
+});
+

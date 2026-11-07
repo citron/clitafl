@@ -16,6 +16,34 @@ node src/index.js match --variant ard-ri --seed 3       # a whole game, printed 
 
 `npm start` does the same as the first line. `npm test` runs the suite.
 
+## Play in the browser
+
+```bash
+node src/index.js serve            # http://127.0.0.1:8080
+node src/index.js serve --port 0   # a free port, printed in the banner
+```
+
+The page is a click-to-move board with the variant, size, seat and AI-strength pickers,
+the record, hint, undo, resign and save. Nothing to build: it is one HTML file, one CSS
+file and one JS file calling the API.
+
+## Play from a script, or as an AI agent
+
+```bash
+node src/index.js serve --port 8080 &
+curl -s localhost:8080/api                                     # the API describes itself
+curl -s localhost:8080/api/games -X POST -H 'content-type: application/json' \
+  -d '{"variant":"tablut","seats":{"attacker":"ai","defender":"agent"},"levels":"hard"}'
+curl -s localhost:8080/api/games/<id>                          # board, turn, legal moves
+curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
+  -d '{"from":"d5","to":"d4"}'                                  # the AI answers in the reply
+```
+
+`agent` is the seat you play from outside. The reply to a move carries the whole exchange
+— your ply and the AI's — plus the new state, so one request is one turn. `GET /api` lists
+the endpoints, `hint`, `undo`, `resign`, `seats`, the record, the rules and the save file
+are all there.
+
 ## Pick a game
 
 ```bash

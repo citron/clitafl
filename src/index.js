@@ -14,7 +14,7 @@ const { Ansi } = require('./ui/ansi');
 const { LEVEL_IDS, levelOf } = require('./ai/player');
 const { playMatch } = require('./headless');
 
-const COMMANDS = ['play', 'demo', 'match', 'variants', 'rules', 'help'];
+const COMMANDS = ['play', 'demo', 'match', 'serve', 'variants', 'rules', 'help'];
 
 const OPTIONS = {
   variant: { type: 'string', short: 'v' },
@@ -30,6 +30,10 @@ const OPTIONS = {
   seed: { type: 'string' },
   'max-plies': { type: 'string' },
   fps: { type: 'string' },
+  port: { type: 'string' },
+  host: { type: 'string' },
+  'max-games': { type: 'string' },
+  ttl: { type: 'string' },
   'no-color': { type: 'boolean' },
   color: { type: 'boolean' },
   ascii: { type: 'boolean' },
@@ -47,6 +51,7 @@ Commands
   play         play a game (default)
   demo         watch the AI play itself, move by move
   match        play a whole AI vs AI game headless and print the record
+  serve        start the web board and the HTTP API
   variants     list the historical variants
   rules [name] show the rules (of one variant)
   help         this text
@@ -64,6 +69,10 @@ Options
       --seed <n>            deterministic AI for matches
       --max-plies <n>       stop a match after n plies
       --fps <ms>            animation frame delay
+      --port <n>            serve: TCP port (default 8080)
+      --host <addr>         serve: interface to bind (default 127.0.0.1)
+      --max-games <n>       serve: games kept open at once (default 50)
+      --ttl <minutes>       serve: forget a game untouched for that long (default 180)
       --ascii               plain ASCII glyphs, no unicode
       --no-color            disable ANSI colour (also honours NO_COLOR)
       --no-animation        do not animate moves
@@ -154,6 +163,63 @@ function buildController(values) {
   });
 }
 
+function portNumber(value) {
+  const n = num(value, 'port');
+  if (!Number.isInteger(n) || n < 0 || n > 65535) throw new Error(`--port expects a TCP port 0-65535, got '${value}'`);
+  return n;
+}
+
+/** What a terminal - and an AI agent - needs to know when the server is up. */
+function serverBanner(started) {
+  const { url, store, root } = started;
+  const ttlMinutes = Math.round(store.ttlMs / 60000);
+  return [
+    'clitafl is serving',
+    '',
+    `  board      ${url}/            the web client, click to move`,
+    `  api        ${url}/api         the endpoints, described as JSON`,
+    `  api index  ${url}/api/health  health, open games, what the engine is`,
+    '',
+    `  open games ${store.maxGames} at a time, forgotten after ${ttlMinutes} minutes without a request`,
+    `  client     ${root}`,
+    '',
+    '  open a game, play the defenders, and the AI answers in the same reply:',
+    '',
+    `    curl -s ${url}/api/games -X POST -H 'content-type: application/json' \\`,
+    `      -d '{"variant":"tablut","seats":{"attacker":"ai","defender":"agent"},"levels":"hard"}'`,
+    '',
+    `    curl -s ${url}/api/games/<id> -X POST -H 'content-type: application/json' \\`,
+    `      -d '{"from":"d5","to":"d4"}'`,
+  ].join('\n');
+}
+
+async function runServer(args) {
+  const { serve } = require('./net/server');
+  const started = await serve({
+    host: args.host || '127.0.0.1',
+    port: args.port === undefined ? 8080 : portNumber(args.port),
+    maxGames: args['max-games'] ? num(args['max-games'], 'max-games') : undefined,
+    ttlMs: args.ttl ? Math.round(num(args.ttl, 'ttl') * 60000) : undefined,
+    timeMs: args.time ? num(args.time, 'time') : undefined,
+    version: readVersion(),
+  });
+  process.stdout.write(`${serverBanner(started)}\n\npress ctrl-c to stop\n`);
+
+  const stopped = new Promise((resolve) => {
+    const stop = (signal) => {
+      process.stdout.write(`\n${signal}: closing the server\n`);
+      resolve();
+    };
+    process.once('SIGINT', () => stop('SIGINT'));
+    process.once('SIGTERM', () => stop('SIGTERM'));
+  });
+  await stopped;
+
+  if (typeof started.server.closeAllConnections === 'function') started.server.closeAllConnections();
+  await new Promise((resolve) => started.server.close(resolve));
+  return 0;
+}
+
 function listVariants() {
   const rows = describeVariants();
   const width = Math.max(...rows.map((row) => row.name.length));
@@ -239,6 +305,8 @@ async function runCommand(command, args, positionals) {
     }
     return 0;
   }
+
+  if (command === 'serve') return runServer(args);
 
   const controller = buildController(args);
   if (command === 'demo') {
