@@ -59,11 +59,14 @@ class Display {
     const { ansi } = this;
     const size = board.size;
     const highlight = opts.lastMove || null;
-    const lines = [];
-    const header = ['    ', ...Array.from({ length: size }, (_, c) => LETTERS[c])].join(' ');
-    lines.push(ansi.style(header, 'gray'));
+    // One gutter for both frames: the rank label is padded to it, the header pads
+    // with the same number of spaces, so every file letter sits on its column.
+    const gutter = String(size).length + 1;
+    const letters = Array.from({ length: size }, (_, c) => LETTERS[c]);
+    const frame = ansi.style([' '.repeat(gutter), ...letters].join(' '), 'gray');
+    const lines = [frame];
     for (let r = 0; r < size; r += 1) {
-      const cells = [ansi.style(String(r + 1).padStart(3), 'gray')];
+      const cells = [ansi.style(String(r + 1).padStart(gutter), 'gray')];
       for (let c = 0; c < size; c += 1) {
         const glyph = this.glyphFor(board, r, c);
         const index = board.idx(r, c);
@@ -73,7 +76,7 @@ class Display {
       }
       lines.push(cells.join(' '));
     }
-    lines.push(ansi.style(header, 'gray'));
+    lines.push(frame);
     return lines;
   }
 

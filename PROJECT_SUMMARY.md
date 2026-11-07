@@ -7,7 +7,7 @@ rules engine, a search AI, an animated renderer, saves, records and headless pla
 JavaScript on Node.js 20+, CommonJS, **no runtime dependencies**.
 
 ```
-82 tests · 13 source files · ~2 200 lines of engine, AI, UI and CLI
+83 tests · 13 source files · ~2 200 lines of engine, AI, UI and CLI
 ```
 
 ## Why version 2 exists
@@ -33,6 +33,7 @@ Everything on that list is fixed:
 | legend showed piece counts that were always 0 | legend counts the pieces on the board |
 | `moves` listed squares without destinations | `moves` lists `d5->d6, d5->d7` per piece |
 | `board` was not a command, so it was parsed as a move | `board`, `history` are commands, listed in `help` |
+| the file letters of the header/footer were a column off the grid | rank labels and the letter frame share one gutter, and a test checks the alignment on 7, 9, 11, 13 and 15 |
 | nothing was under version control, no licence | `git` history started, ISC `LICENSE`, `.gitignore` no longer hides `package-lock.json` |
 
 ## Design decisions
@@ -79,7 +80,7 @@ tests/         board · game · notation · ai · display · headless · cli (+ 
 - AI: search-based, four levels, seeded; plays out every variant headlessly.
 - CLI: `play`, `demo`, `match`, `variants`, `rules`, `help`; flags for seats, strength,
   budget, size, seeds, scripts, saves, records, plain-ASCII and colour-off.
-- Tests: 82, all green, `npm test`, no dependencies.
+- Tests: 83, all green, `npm test`, no dependencies.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.
 
 ## Roadmap

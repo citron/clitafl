@@ -19,7 +19,7 @@ Node.js 20 or newer (tested on Node 24). That is all: the CLI uses only `node:ut
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 82 tests, node's built-in runner, no download needed
+npm test        # 83 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -154,7 +154,7 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-82 tests on `node:test` — no framework to install. They cover the historical armies and
+83 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant, movement, capture counts (open field, beside and on a
 castle, edge), siege sealing, apply/undo symmetry, save round-trips, repetition and
 ply-limit draws, the search (mate in one, escapes, time budget, depth monotonicity,

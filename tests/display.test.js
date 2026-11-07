@@ -8,6 +8,7 @@ const { Ansi } = require('../src/ui/ansi');
 const { Game } = require('../src/rules/game');
 const { getVariant } = require('../src/rules/variants');
 const { KING, DEFENDER, ATTACKER, SIDE_ATTACKER, SIDE_DEFENDER } = require('../src/rules/pieces');
+const { LETTERS } = require('../src/rules/notation');
 const { makeBoard } = require('./helpers');
 
 const plain = () => new Display({ ansi: new Ansi({ color: false }), animate: false });
@@ -35,6 +36,29 @@ test('the board is drawn with a coordinate frame and every piece on its square',
   assert.ok(text.includes('★'), 'the king is drawn');
   assert.ok(/●/.test(text), 'defenders are drawn');
   assert.ok(/○/.test(text), 'attackers are drawn');
+});
+
+test('the file letters sit on their column, on every board size', () => {
+  const display = plain();
+  for (const size of [7, 9, 11, 13, 15]) {
+    const lines = display.boardLines(Game.create('tablut', size).board);
+    const header = lines[0];
+    const footer = lines[lines.length - 1];
+    const ranks = lines.slice(1, -1);
+    assert.equal(ranks.length, size, `${size}x${size}: one line per rank`);
+    assert.equal(header, footer, `${size}x${size}: the footer repeats the header`);
+
+    // the first glyph of a rank line is the left edge of the grid
+    const gridStart = ranks[0].search(/[^ \d]/);
+    for (const row of ranks) {
+      assert.equal(row.search(/[^ \d]/), gridStart, `${size}x${size}: the ranks start on one column`);
+    }
+    for (let c = 0; c < size; c += 1) {
+      const letter = LETTERS[c];
+      assert.equal(header.indexOf(letter), gridStart + 2 * c, `${size}x${size}: file ${letter} sits over its squares`);
+      assert.equal(footer.indexOf(letter), gridStart + 2 * c, `${size}x${size}: ${letter} in the footer too`);
+    }
+  }
 });
 
 test('--ascii draws with plain letters and no unicode', () => {

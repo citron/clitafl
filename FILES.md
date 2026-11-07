@@ -59,8 +59,9 @@
 - **notation.test.js** — 6 tests: squares, every spelling of a move, large boards, errors.
 - **ai.test.js** — 10 tests: level presets, mate in one, taking the escape, legality in
   every variant, time budget, depth monotonicity, seeded reproducibility.
-- **display.test.js** — 11 tests: the board frame, glyphs, `--ascii`, colour on/off, legend
-  counts, status, outcome, banner, animation safety, the command list.
+- **display.test.js** — 12 tests: the board frame, file letters aligned on their column at
+  every size, glyphs, `--ascii`, colour on/off, legend counts, status, outcome, banner,
+  animation safety, the command list.
 - **headless.test.js** — 8 tests: seeded RNG, full games per variant, record shape,
   determinism, mixed strengths, custom sizes, progress.
 - **cli.test.js** — 15 tests: flag parsing, seats, per-side levels, help text, and the real
