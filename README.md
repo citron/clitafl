@@ -25,7 +25,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 138 tests, node's built-in runner, no download needed
+npm test        # 143 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -89,6 +89,7 @@ clitafl is serving
   board      http://127.0.0.1:8080/            the web client, click to move
   api        http://127.0.0.1:8080/api         the endpoints, described as JSON
   api index  http://127.0.0.1:8080/api/health  health, open games, what the engine is
+  lobby      http://127.0.0.1:8080/api/lobby   the games with a seat going: join takes the seat and its token
 
   open games 50 at a time, forgotten after 180 minutes without a request
   watchers   8 connections may watch one game as it is played
@@ -116,6 +117,15 @@ curl -s localhost:8080/api/games/<id>
 curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
   -d '{"from":"d5","to":"d4"}'
 
+# find a game with a seat going, and take that seat
+curl -s localhost:8080/api/lobby
+curl -s localhost:8080/api/lobby/<id>/join -X POST -H 'content-type: application/json' \
+  -d '{"seat":"defender","name":"bot-7"}'
+
+# play the seat you took: the join reply is the only place its token appears
+curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
+  -H 'x-clitafl-token: <token>' -d '{"from":"d5","to":"d4"}'
+
 # watch that game: one event per move, pushed as it happens
 curl -sN localhost:8080/api/games/<id>/events
 ```
@@ -126,20 +136,29 @@ curl -sN localhost:8080/api/games/<id>/events
 | `GET /api/variants` · `GET /api/variants/:id?size=11` | the armies, and the rules as text |
 | `GET /api/levels` | the strength presets with their depth and budget |
 | `GET /api/games` · `POST /api/games` | list / open (`?include=closed` lists finished ones) |
+| `GET /api/lobby` · `GET /api/lobby/:id` | the games with a seat going, and one card of it |
+| `POST /api/lobby/:id/join` | take an open seat `{seat, name}`: the reply carries its token |
 | `GET /api/games/:id?moves=turn\|none\|all` | full state: board, turn, legal moves, record |
 | `POST /api/games/:id/moves` | play `{from,to}` (or `{move:"d5-d6"}`), `?ai=false` silences the AI seats |
 | `POST /api/games/:id/ai` | let the AI seats play `{moves:n}` plies, or `{moves:"all"}` |
 | `POST /api/games/:id/hint` | search a move without playing it |
-| `POST /api/games/:id/undo` · `/resign` · `/seats` | take plies back, resign, hand a seat to the AI |
+| `POST /api/games/:id/undo` · `/resign` · `/seats` | take plies back, resign, hand a seat to the AI, the lobby or an agent |
 | `GET /api/games/:id/moves?since=n` · `/rules` · `/export` | the record, the rules, the save file |
 | `GET /api/games/:id/events` | the game as a Server-Sent Events stream (`text/event-stream`) |
 | `DELETE /api/games/:id` | close a game and free its slot |
 
 Notes for a client:
 
-- A seat is `human`, `ai` or `agent`. `agent` (like `human`) is the caller's seat, so
-  `POST /moves` answers for it and plays every AI seat in turn; asking the server to move
-  an AI seat by hand is a `409`.
+- A seat is `human`, `ai`, `agent` / `client` — three spellings of "the caller plays this" —
+  or `open`, the same seat with nobody in it yet, which is what the lobby sells. `POST /moves`
+  plays for a caller seat and then every AI seat in turn; asking the server to move an AI
+  seat by hand is a `409`, and playing an open seat is a `409` until someone joins it.
+- A seat the lobby sold is played by its token alone: send it as `x-clitafl-token: <token>`,
+  the token from `POST /api/lobby/:id/join`. Without it, `401`. A token is shown once, in the
+  join reply, and never appears in a state view; a seat handed to the AI, or back to an
+  anonymous caller, gives its token up. `undo` and `seats` ask for the token of any seat in
+  the game, because they act on the game a player owns; a `hint` is advice, not a move, so it
+  stays open — the board is public information.
 - A reply carries `played` — the plies of the whole exchange: yours, then each AI seat.
 - A legal move is `{from, to, piece, san}`: `piece` is `king`, `defender` or `attacker`, and
   `san` is the string you post back as `{"move": "d5-d6"}`.
@@ -149,8 +168,9 @@ Notes for a client:
   keyed by side, `?moves=none` makes it empty.
 - `time_ms` (and `time_ms_a` / `time_ms_d`) is capped at 30 s, because the search runs
   inside the request.
-- Bad input is a `400` with one readable sentence, a game that is over is a `409`, a route
-  that does not exist is a `404` with a hint, and CORS is open (`OPTIONS` → 204).
+- Bad input is a `400` with one readable sentence, a seat you do not hold is a `401`, a game
+  that is over is a `409`, a route that does not exist is a `404` with a hint, and CORS is
+  open (`OPTIONS` → 204).
 - The save file from `/export` comes back as `POST /api/games {"load": …}`, so a game can
   leave the server and come back to it — that is also how the CLI's `--record` and `--load`
   files look.
@@ -168,6 +188,9 @@ Games live in memory: `--max-games` slots, least recently used ones forgotten af
 restart finds them again; `GET /api/health` reports the directory (`state_dir`) and the
 number of open games. The server binds `127.0.0.1` by default — `--host 0.0.0.0` is how
 you put it on a network, and there is no authentication, so do that only where you mean it.
+The seat token is the only credential the server has: it keeps a lobby seat to one client,
+it does not keep a game private — a game with an open seat is on `GET /api/lobby` for
+whoever can reach the port.
 
 ## Playing
 
@@ -273,11 +296,11 @@ src/ai/player.js        strength presets, noise, book hook
 src/ui/ansi.js          ANSI/terminal control, NO_COLOR, alt screen
 src/ui/display.js       board, legend, banner, rules text, move animation
 src/cli/controller.js   one session: seats, turn loop, in-game commands, cleanup
-src/net/errors.js       ApiError and the status helpers: 400, 404, 405, 409, 413
+src/net/errors.js       ApiError and the status helpers: 400, 401, 404, 405, 409, 413
 src/net/state.js        the public JSON view of a game: board, moves, record, rules text
-src/net/store.js        sessions, seats, levels, clocks, TTL, max games, watchers
+src/net/store.js        sessions, seats, seat tokens, levels, clocks, TTL, max games, watchers
 src/net/disk.js         the state directory: one save file per game, written atomically
-src/net/api.js          the route table and the handlers, self-documenting
+src/net/api.js          the route table, the handlers and the lobby, self-documenting
 src/net/server.js       node:http: static files, CORS, body cap, /api dispatch
 src/headless.js         AI vs AI without a terminal
 src/index.js            command line, including serve
@@ -294,7 +317,7 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-138 tests on `node:test` — no framework to install. They cover the historical armies and
+143 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
 king capture, the marked squares capturing for both sides), movement, capture counts (open
 field, beside and on a castle, edge), siege sealing, apply/undo symmetry, save round-trips,

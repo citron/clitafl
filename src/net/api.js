@@ -6,7 +6,7 @@ const { SIDE_ATTACKER, SIDE_DEFENDER } = require('../rules/pieces');
 const { parseMove, formatSquare, formatSan } = require('../rules/notation');
 const S = require('./state');
 const E = require('./errors');
-const { seatsFrom, levelsFrom } = require('./store');
+const { levelsFrom, SEAT_KINDS, TOKEN_HEADER } = require('./store');
 
 const MOVE_OPTIONS = ['turn', 'none', 'all'];
 const SIDES = [SIDE_ATTACKER, SIDE_DEFENDER];
@@ -27,14 +27,17 @@ function apiIndex(store, version) {
       { method: 'GET', path: '/api/variants/:id?size=11', about: 'one variant, with its rules as text' },
       { method: 'GET', path: '/api/levels', about: 'the AI strength presets' },
       { method: 'GET', path: '/api/games', about: 'the open games; ?include=closed also lists finished ones' },
-      { method: 'POST', path: '/api/games', about: 'open a game: variant, size, seats, levels, time_ms, seed, max_plies, load' },
+      { method: 'POST', path: '/api/games', about: 'open a game: variant, size, seats, levels, time_ms, seed, max_plies, load, names' },
+      { method: 'GET', path: '/api/lobby', about: 'the games with a seat going: join one and get its token' },
+      { method: 'GET', path: '/api/lobby/:id', about: 'one lobby card: who is in the game, which seats are open' },
+      { method: 'POST', path: '/api/lobby/:id/join', about: 'take an open seat: {seat, name} answers with the seat token' },
       { method: 'GET', path: '/api/games/:id?moves=turn|none|all', about: 'full state: board, turn, legal moves, history' },
       { method: 'POST', path: '/api/games/:id/moves', about: 'play {from,to} as the seat the caller controls' },
       { method: 'POST', path: '/api/games/:id/ai', about: 'let the AI seats play: {moves:n} plies, {moves:"all"} while an AI seat is to move' },
       { method: 'POST', path: '/api/games/:id/hint', about: 'search a move without playing it: {side, level, time_ms}' },
-      { method: 'POST', path: '/api/games/:id/undo', about: 'take back {plies:n} plies' },
+      { method: 'POST', path: '/api/games/:id/undo', about: 'take back {plies:n} plies (a seat token of this game authorises it)' },
       { method: 'POST', path: '/api/games/:id/resign', about: 'resign for {side}' },
-      { method: 'POST', path: '/api/games/:id/seats', about: 'hand a seat to the AI or back: {seats, levels, time_ms}' },
+      { method: 'POST', path: '/api/games/:id/seats', about: 'hand a seat to the AI, the lobby or an agent: {seats, names, levels, time_ms}' },
       { method: 'GET', path: '/api/games/:id/moves?since=ply', about: 'the record, from ply `since` on' },
       { method: 'GET', path: '/api/games/:id/rules', about: 'the rules of the variant being played' },
       { method: 'GET', path: '/api/games/:id/export', about: 'the save file of the game; POST it back as {load: ...} to resume' },
@@ -42,8 +45,9 @@ function apiIndex(store, version) {
       { method: 'DELETE', path: '/api/games/:id', about: 'close a game and free its slot' },
     ],
     seats: {
-      kinds: ['human', 'ai', 'agent'],
-      about: 'who controls a side: `ai` is played by the server search, `human` and `agent` by the caller',
+      kinds: SEAT_KINDS,
+      about: 'who controls a side: `ai` is played by the server search; `human`, `agent` and `client` by the caller; `open` is a caller seat nobody has taken yet',
+      tokens: `a seat the lobby sold has a token, and only its token plays it: send it as the ${TOKEN_HEADER} header (401 without it). GET /api/lobby lists the games with a seat going, POST /api/lobby/:id/join hands out the token`,
     },
     notes: [
       'the game is public information: legal_moves lists every move of the side to move',
@@ -53,8 +57,9 @@ function apiIndex(store, version) {
       'a POST /moves reply plays every AI seat in turn, so one request covers one exchange',
       'GET /api/games/:id/events pushes that game as Server-Sent Events: "ply" per move, then "state"',
       'games live in memory, and in a directory when the server runs with --state-dir: a restart finds them again, GET /api/health says where',
+      'a lobby: open a game with {"seats":{"defender":"open"}}, GET /api/lobby lists it, and POST /api/lobby/:id/join {"seat":"defender","name":"bot-7"} hands out the token that plays it',
       'the search is synchronous: a long time_ms blocks that one request, and is capped at 30 s',
-      'a failure is one readable sentence: {"error": "...", "status": n}, with 400, 404, 405, 409, 413',
+      'a failure is one readable sentence: {"error": "...", "status": n}, with 400, 401, 404, 405, 409, 413',
     ],
     games_open: store.size,
   };
@@ -97,6 +102,27 @@ function claimSeat(session, side) {
   }
 }
 
+/** The seat token a request carries, if it carries one. */
+function seatToken(ctx) {
+  const headers = ctx.headers || {};
+  const raw = headers[TOKEN_HEADER];
+  return typeof raw === 'string' ? raw.trim() : null;
+}
+
+/**
+ * A call about the whole game (undo, seats): the token of any guarded seat is
+ * authority over it, because that client is one of the players.
+ */
+function claimGame(session, ctx) {
+  const token = seatToken(ctx);
+  const guarded = SIDES.filter((side) => session.tokens && session.tokens[side]);
+  if (!guarded.length) return session;
+  if (guarded.some((side) => session.tokens[side] === token)) return session;
+  throw E.unauthorized(
+    `this game is played by named agents (${guarded.join(' and ')}): send the token of one of those seats as ${TOKEN_HEADER}`,
+  );
+}
+
 function requirePlaying(session) {
   if (session.game.isGameOver()) {
     throw E.conflict(`the game is over (${session.game.status}${session.game.reason ? `: ${session.game.reason}` : ''})`);
@@ -130,17 +156,22 @@ function createGame(store, body, query) {
     }
   }
   const session = store.create(spec);
+  const open = S.openSeatsView(session);
   // One opening ply at most: an all-AI game must not be played out by the request that opens it.
   const played = spec.auto === false ? [] : store.playAiSeats(session, 1);
   announce(store, session, played);
-  return { status: 201, body: { ok: true, played, game: state(store, session, query) } };
+  const out = { ok: true, played, game: state(store, session, query) };
+  // Seats the lobby can sell: say so in the reply that opened the game.
+  if (open.length) out.open_seats = open;
+  return { status: 201, body: out };
 }
 
-function playForClient(store, session, body, query) {
+function playForClient(store, session, body, query, ctx) {
   requirePlaying(session);
   const side = body.side ? sideName(body.side) : session.game.turn;
   if (side !== session.game.turn) throw E.conflict(`it is the ${session.game.turn} to move, not the ${side}`);
   claimSeat(session, side);
+  store.requireSeat(session, side, seatToken(ctx));
   const move = readMoveInput(body, session.game.board.size);
 
   let result;
@@ -216,8 +247,9 @@ function giveHint(store, session, body) {
   };
 }
 
-function changeSeats(store, session, body) {
-  if (body.seats !== undefined) session.seats = seatsFrom(body.seats);
+function changeSeats(store, session, body, ctx) {
+  claimGame(session, ctx);
+  store.applySeats(session, body.seats, body.names);
   if (body.levels !== undefined || body.level !== undefined) session.levels = levelsFrom(body.levels, body.level);
   const hasTime = body.time_ms !== undefined || body.time_ms_a !== undefined || body.time_ms_d !== undefined;
   if (hasTime) {
@@ -228,6 +260,49 @@ function changeSeats(store, session, body) {
   }
   announce(store, session);
   return { body: { ok: true, game: state(store, session) } };
+}
+
+/** A row of the lobby: a game with a seat a client can take. */
+function lobbyCard(session) {
+  const card = S.summaryView(session);
+  card.events_url = `/api/games/${session.id}/events`;
+  card.join = `POST /api/lobby/${session.id}/join {"seat":"${S.openSeatsView(session)[0] || 'attacker'}"}`;
+  return card;
+}
+
+/**
+ * The lobby: a game opened with `"seats":{"defender":"open"}` is listed here, and the
+ * first client to join takes the seat and its token.
+ */
+function lobbyList(store) {
+  const games = store.listOpen().map(lobbyCard);
+  return {
+    body: {
+      ok: true,
+      games,
+      join: 'POST /api/lobby/<id>/join {"seat":"attacker|defender","name":"your bot"}',
+      token_header: TOKEN_HEADER,
+    },
+  };
+}
+
+function joinLobby(store, session, body, query) {
+  const seat = body.seat === undefined ? S.openSeatsView(session)[0] : body.seat;
+  if (seat === undefined) {
+    throw E.conflict(`this game has no open seat: GET /api/lobby/${session.id} shows who is in it`);
+  }
+  const claimed = store.joinSeat(session, seat, body.name);
+  announce(store, session);
+  return {
+    body: {
+      ok: true,
+      seat: claimed.side,
+      name: claimed.name,
+      token: claimed.token,
+      token_header: TOKEN_HEADER,
+      game: state(store, session, query),
+    },
+  };
 }
 
 function gameMoves(store, session, query) {
@@ -250,6 +325,7 @@ const ROUTES = [
       max_games: store.maxGames,
       max_watchers: store.maxWatchers,
       state_dir: store.stateDir,
+      token_header: TOKEN_HEADER,
       variants: V.VARIANT_IDS,
       levels: LEVEL_IDS,
       engine: 'negamax + alpha-beta, transposition table, killer moves, quiescence, opening book, time or node budget',
@@ -269,16 +345,20 @@ const ROUTES = [
     },
   })],
   ['POST', 'games', (store, ctx) => createGame(store, ctx.body, ctx.query)],
+  ['GET', 'lobby', (store) => lobbyList(store)],
+  ['GET', 'lobby/:id', (store, ctx) => ({ body: { ok: true, game: lobbyCard(store.get(ctx.params.id)) } })],
+  ['POST', 'lobby/:id/join', (store, ctx) => joinLobby(store, store.get(ctx.params.id), ctx.body, ctx.query)],
   ['GET', 'games/:id', (store, ctx) => ({ body: { game: state(store, store.get(ctx.params.id), ctx.query) } })],
   ['DELETE', 'games/:id', (store, ctx) => {
     const session = store.remove(ctx.params.id);
     return { body: { ok: true, closed: session.id } };
   }],
-  ['POST', 'games/:id/moves', (store, ctx) => playForClient(store, store.get(ctx.params.id), ctx.body, ctx.query)],
+  ['POST', 'games/:id/moves', (store, ctx) => playForClient(store, store.get(ctx.params.id), ctx.body, ctx.query, ctx)],
   ['POST', 'games/:id/ai', (store, ctx) => playForAi(store, store.get(ctx.params.id), ctx.body)],
   ['POST', 'games/:id/hint', (store, ctx) => giveHint(store, store.get(ctx.params.id), ctx.body)],
   ['POST', 'games/:id/undo', (store, ctx) => {
     const session = store.get(ctx.params.id);
+    claimGame(session, ctx);
     const plies = ctx.body.plies === undefined ? 1 : Number(ctx.body.plies);
     if (!Number.isInteger(plies) || plies < 1) throw E.badRequest(`plies expects a whole number >= 1, got '${ctx.body.plies}'`);
     const undone = session.game.undo(plies);
@@ -289,11 +369,13 @@ const ROUTES = [
     const session = store.get(ctx.params.id);
     requirePlaying(session);
     const side = ctx.body.side ? sideName(ctx.body.side) : session.game.turn;
+    // Giving a game away is a player's act: a guarded side must show its token.
+    store.requireSeat(session, side, seatToken(ctx));
     session.game.resign(side);
     announce(store, session);
     return { body: { ok: true, game: state(store, session) } };
   }],
-  ['POST', 'games/:id/seats', (store, ctx) => changeSeats(store, store.get(ctx.params.id), ctx.body)],
+  ['POST', 'games/:id/seats', (store, ctx) => changeSeats(store, store.get(ctx.params.id), ctx.body, ctx)],
   ['GET', 'games/:id/moves', (store, ctx) => gameMoves(store, store.get(ctx.params.id), ctx.query)],
   ['GET', 'games/:id/rules', (store, ctx) => {
     const session = store.get(ctx.params.id);
@@ -358,7 +440,11 @@ function handleApi(store, request = {}) {
   const found = route.regex.exec(path);
   const params = {};
   route.names.forEach((name, i) => { params[name] = decodeURIComponent(found[i + 1]); });
-  const ctx = { params, query: request.query || {}, body: request.body || {}, version };
+  const headers = {};
+  for (const [key, value] of Object.entries(request.headers || {})) {
+    if (typeof value === 'string') headers[String(key).toLowerCase()] = value;
+  }
+  const ctx = { params, query: request.query || {}, body: request.body || {}, headers, version };
 
   try {
     const out = route.handler(store, ctx);

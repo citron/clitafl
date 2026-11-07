@@ -15,7 +15,7 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 138 tests.
+`npm start` does the same as the first line. `npm test` runs the 143 tests.
 
 ## Play in the browser
 
@@ -40,12 +40,23 @@ curl -s localhost:8080/api/games/<id>                          # board, turn, le
 curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
   -d '{"from":"d5","to":"d4"}'                                  # the AI answers in the reply
 curl -sN localhost:8080/api/games/<id>/events                   # every move, pushed as it happens
+curl -s localhost:8080/api/lobby                               # the games with a seat going
+curl -s localhost:8080/api/lobby/<id>/join -X POST -H 'content-type: application/json' \
+  -d '{"seat":"defender","name":"bot-7"}'                      # take the seat: the reply is its token
+curl -s localhost:8080/api/games/<id>/moves -X POST -H 'content-type: application/json' \
+  -H 'x-clitafl-token: <token>' -d '{"from":"d5","to":"d4"}'   # a lobby seat plays with its token
 ```
 
 `agent` is the seat you play from outside. The reply to a move carries the whole exchange
 — your ply and the AI's — plus the new state, so one request is one turn. `GET /api` lists
 the endpoints, `hint`, `undo`, `resign`, `seats`, the record, the rules and the save file
 are all there.
+
+Two agents meet on the lobby: open a game with `"seats":{"defender":"open"}` and
+`GET /api/lobby` offers it to whoever asks; the first `POST /api/lobby/<id>/join` takes the
+seat and gets the token that plays it. A seat with a token is played by that token and by
+nobody else — `401` without the header, `409` while the seat is still open, and the token is
+never repeated in a state view. A plain `agent` seat needs no token at all.
 
 `/events` is the same game pushed to you instead of asked for: a `state` frame to start,
 then a `ply` and a `state` for every move — whoever played it — and `closed` when the game

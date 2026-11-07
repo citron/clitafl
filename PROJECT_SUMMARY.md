@@ -8,7 +8,7 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-138 tests · 21 source files + 3 web files · ~5 200 lines of engine, AI, UI, CLI and server
+143 tests · 21 source files + 3 web files · ~5 200 lines of engine, AI, UI, CLI and server
 (~8 000 with the tests)
 ```
 
@@ -47,7 +47,7 @@ it over a socket, without adding a dependency.
 | need | now |
 | --- | --- |
 | no way to play outside a terminal | `clitafl serve` opens a board page on one port: click-to-move, six variants, sizes 7–19, seat and strength pickers, hint, undo, resign, save |
-| no way for a program to play | a JSON API: `GET /api` describes every endpoint, 18 routes cover open/read/move/hint/undo/resign/seats/record/rules/save/watch/close |
+| no way for a program to play | a JSON API: `GET /api` describes every endpoint, 21 routes cover open/read/move/hint/undo/resign/seats/record/rules/save/watch/close |
 | an agent must guess the protocol | seats are `human`, `ai`, `agent`; `legal_moves` is the list for the side to move; a move reply carries the whole exchange, AI answer included; `400`/`404`/`405`/`409` are one readable sentence |
 | a web stack usually means a framework | the client is `web/index.html` + `style.css` + `app.js`, the server is `node:http` reading its own directory: nothing to install, nothing to build |
 | the server must not be a way to fill the disk | games live in memory with a slot cap (`--max-games`) and a TTL (`--ttl` minutes), the body is capped at 1 MiB, the thinking clock at 30 s, and the file server cannot leave `web/` |
@@ -95,6 +95,21 @@ have to keep the process alive.
 | a directory with a broken file, or more games than slots | a file that cannot be read is left where it is, the newest games are loaded first up to the slots, a game older than the TTL is pruned where it lies, a file that is not a game (`notes.txt`) is not touched |
 | a directory nobody can find | `GET /api/health` answers `state_dir`, the `serve` banner prints it, and it is in the API notes |
 
+## Why version 2.5 exists
+
+Two agents could each be given a seat, but the server had nothing to advertise a game with,
+and a seat the caller held was held by anybody who asked for it. Pairing needs a board to
+post the game on, and a way to prove a seat.
+
+| need | now |
+| --- | --- |
+| a game nobody can find | a seat kind `open`: a game opened with `{"seats":{"defender":"open"}}` is on `GET /api/lobby` with its variant, size, turn and the seat that is going, and `GET /api/lobby/:id` is one card of it |
+| two agents meeting with no referee between them | `POST /api/lobby/:id/join {"seat","name"}` takes the seat, labels it, and hands out the token that plays it; one seat one owner, and a second join is a `409` that names the holder |
+| a seat anybody could play | a seat with a token is played by that token alone: `x-clitafl-token` on the request, `401` without it, `409` while the seat is still open |
+| one player undoing the other's game | `undo` and `seats` ask for the token of any seat in the game, because they act on a game somebody owns; a `hint` stays open — the board is public information and advice is not a move |
+| a token leaking out of the API | it is shown once, in the join reply, never in a state view, and a seat handed to the AI, or back to an anonymous caller, gives it up |
+| a restart forgetting who was in the game | the save file keeps the token, the name and the open flags, so the second server guards the seats exactly as the first one did |
+
 ## Design decisions
 
 - **Data, not code, for the rules.** A variant is a row in `src/rules/variants.js`:
@@ -127,6 +142,10 @@ have to keep the process alive.
   with a `session` key around them, not a server-only record: the same file goes out through
   `/export`, back in through `{"load": …}`, and to `--load`. Nothing is written in a format
   only the server can read.
+- **The lobby is the only place a token is minted.** `{"seats":{"defender":"agent"}}` stays
+  the plain caller seat it always was — the documented one-`curl`-per-move flow needs no
+  credential — and only a join makes a seat private. One way in, one way to prove you are in,
+  and the seat that is open to the lobby is open to everybody who can reach the port.
 - **A suggestion is not a rule.** A book move is checked against the legal moves, a missing
   book is not an error, and the client renders exactly what the API sends.
 - **Claims are checked by tests.** The historical armies, the king-capture counts, the
@@ -179,15 +198,15 @@ tests/         board · game · notation · ai · display · headless · cli · 
 - Web: a board page served by the same process — click-to-move, seat pickers, record,
   hint, AI moves, undo, resign, save, an agent panel with the `curl` of the current game,
   and a stream it watches so a move played elsewhere lands on the board by itself.
-- API: 18 JSON endpoints, self-describing, CORS open, a session store with slots, TTL,
-  watchers and an optional state directory, a Server-Sent Events stream per game, save-file
-  round-trips, one message per error.
-- Tests: 138, all green, `npm test`, no dependencies.
+- API: 21 JSON endpoints, self-describing, CORS open, a session store with slots, TTL,
+  watchers and an optional state directory, a lobby where an open seat goes to the first
+  client that takes it — with the token that plays it —, a Server-Sent Events stream per
+  game, save-file round-trips, one message per error.
+- Tests: 143, all green, `npm test`, no dependencies.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.
 
 ## Roadmap
 
-- Pairing and lobby endpoints (two agents meeting on one server), with a token per seat.
 - Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.
 - `ard-ri` has 7×7 armies, and 7×7 boards only carry 8 attackers in the symmetric
   generator: its setup stays a documented reconstruction.

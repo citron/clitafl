@@ -118,7 +118,7 @@ function sendFile(req, res, file, cors) {
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
-  'access-control-allow-headers': 'content-type',
+  'access-control-allow-headers': 'content-type, x-clitafl-token',
   'access-control-max-age': '600',
 };
 
@@ -211,6 +211,7 @@ function createHandler(options = {}) {
         path: pathname,
         query,
         body,
+        headers: req.headers,
         version,
       });
       const headers = { ...CORS };

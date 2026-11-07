@@ -24,6 +24,7 @@ function req(store, method, path, extra = {}) {
     path,
     body: extra.body || {},
     query: extra.query || {},
+    headers: extra.headers || {},
     version: 'test',
   });
 }
@@ -44,12 +45,16 @@ test('GET /api describes the API as data', () => {
   const index = req(makeStore(), 'GET', '/api').body;
   assert.equal(index.name, 'clitafl');
   assert.equal(index.version, 'test');
-  assert.ok(index.endpoints.length >= 15);
+  assert.ok(index.endpoints.length >= 18);
   const paths = index.endpoints.map((row) => `${row.method} ${row.path}`);
   for (const wanted of ['POST /api/games', 'GET /api/games/:id', 'POST /api/games/:id/moves', 'POST /api/games/:id/hint', 'GET /api/games/:id/export']) {
     assert.ok(paths.some((path) => path.startsWith(wanted)), `${wanted} is documented`);
   }
-  assert.deepEqual(index.seats.kinds, ['human', 'ai', 'agent']);
+  for (const wanted of ['GET /api/lobby', 'GET /api/lobby/:id', 'POST /api/lobby/:id/join']) {
+    assert.ok(paths.includes(wanted), `${wanted} is documented`);
+  }
+  assert.deepEqual(index.seats.kinds, ['human', 'ai', 'agent', 'client', 'open']);
+  assert.match(index.seats.tokens, /x-clitafl-token/, 'the index says how a seat token is sent');
   assert.ok(index.playing.length >= 3, 'the index shows how to start playing');
 });
 
@@ -666,6 +671,211 @@ test('a directory is read back: the newest games first, a broken file left alone
     assert.deepEqual(room.list().map((session) => session.id).sort(), [first.game.id, second.game.id].sort(),
       'with room enough, both live games come back and the stale one does not');
     assert.equal(req(room, 'GET', `/api/games/${first.game.id}`).body.game.status, 'playing');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the lobby: a seat that is open is offered, joined, and then played by its token alone', () => {
+  const store = makeStore();
+  const opened = openGame(store, {
+    variant: 'tablut',
+    seats: { attacker: 'ai', defender: 'open' },
+    levels: 'easy',
+    time_ms: 30,
+  });
+  const id = opened.game.id;
+  assert.deepEqual(opened.open_seats, ['defender'], 'the reply that opened the game says which seat is going');
+  assert.equal(opened.game.players.defender.seat, 'human');
+  assert.equal(opened.game.players.defender.open, true);
+  assert.equal(opened.game.players.defender.guarded, false, 'a seat nobody has taken has no token yet');
+
+  const move = firstMoveOf(opened);
+  const anonymous = req(store, 'POST', `/api/games/${id}/moves`, { body: { from: move.from, to: move.to } });
+  assert.equal(anonymous.status, 409);
+  assert.match(anonymous.body.error, /the defender seat is open/, 'an open seat is played by nobody at all');
+
+  const list = req(store, 'GET', '/api/lobby').body;
+  assert.equal(list.games.length, 1, 'the game is on the board');
+  assert.equal(list.games[0].id, id);
+  assert.deepEqual(list.games[0].open_seats, ['defender']);
+  assert.match(list.games[0].join, /POST \/api\/lobby\/\w+\/join/, 'the card says how to take the seat');
+  assert.equal(list.token_header, 'x-clitafl-token');
+
+  const taken = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'defender', name: 'bot-7' } });
+  assert.equal(taken.status, 200, JSON.stringify(taken.body));
+  const token = taken.body.token;
+  assert.ok(typeof token === 'string' && token.length >= 16, `a token to play the seat: '${token}'`);
+  assert.equal(taken.body.seat, 'defender');
+  assert.equal(taken.body.name, 'bot-7');
+  assert.equal(taken.body.game.players.defender.guarded, true);
+  assert.equal(taken.body.game.players.defender.open, false);
+  assert.ok(!JSON.stringify(taken.body.game).includes(token), 'the state never repeats the token');
+
+  const twice = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'defender' } });
+  assert.equal(twice.status, 409);
+  assert.match(twice.body.error, /not open/, 'one seat, one owner');
+  assert.match(twice.body.error, /bot-7/, 'and the game says who has it');
+
+  const noToken = req(store, 'POST', `/api/games/${id}/moves`, { body: { from: move.from, to: move.to } });
+  assert.equal(noToken.status, 401);
+  assert.match(noToken.body.error, /x-clitafl-token/, 'the answer says how to prove the seat');
+
+  const wrong = req(store, 'POST', `/api/games/${id}/moves`, {
+    body: { from: move.from, to: move.to },
+    headers: { 'x-clitafl-token': 'not-the-token' },
+  });
+  assert.equal(wrong.status, 401, 'a token that is not this game is no token');
+
+  const advice = req(store, 'POST', `/api/games/${id}/hint`, { body: { side: 'defender' } });
+  assert.equal(advice.status, 200, JSON.stringify(advice.body));
+  assert.ok(advice.body.hint, 'a hint is the engine speaking: the game is public, asking is not playing');
+
+  const played = req(store, 'POST', `/api/games/${id}/moves`, {
+    body: { from: move.from, to: move.to },
+    headers: { 'x-clitafl-token': token },
+  });
+  assert.equal(played.status, 200, JSON.stringify(played.body));
+  assert.ok(played.body.played.length >= 2, 'the AI seat answers in the same reply, tokened seat as any other');
+
+  const undoBack = req(store, 'POST', `/api/games/${id}/undo`, { body: { plies: 2 } });
+  assert.equal(undoBack.status, 401, 'undo is a player doing something to the game: it needs a seat token');
+  const undone = req(store, 'POST', `/api/games/${id}/undo`, {
+    body: { plies: 2 },
+    headers: { 'x-clitafl-token': token },
+  });
+  assert.equal(undone.status, 200, JSON.stringify(undone.body));
+
+  const card = req(store, 'GET', `/api/lobby/${id}`).body;
+  assert.deepEqual(card.game.open_seats, [], 'the game has nothing left to offer');
+  assert.equal(card.game.players.defender.name, 'bot-7');
+  assert.equal(req(store, 'GET', '/api/lobby').body.games.length, 0, 'and it is off the lobby list');
+});
+
+test('two agents meet on one server: each seat plays its own side with its own token', () => {
+  const store = makeStore();
+  const opened = openGame(store, {
+    variant: 'brandub',
+    seats: { attacker: 'open', defender: 'open' },
+    auto: false,
+    levels: 'easy',
+    time_ms: 30,
+  });
+  const id = opened.game.id;
+  assert.deepEqual(opened.open_seats, ['attacker', 'defender']);
+
+  const alice = req(store, 'POST', `/api/lobby/${id}/join`, { body: { name: 'alice' } });
+  assert.equal(alice.status, 200, JSON.stringify(alice.body));
+  assert.equal(alice.body.seat, 'attacker', 'no seat asked for: the first open one is offered');
+  const bob = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'defender', name: 'bob' } });
+  assert.equal(bob.status, 200, JSON.stringify(bob.body));
+  assert.notEqual(bob.body.token, alice.body.token, 'one token per seat');
+
+  const first = firstMoveOf(alice.body);
+  const steal = req(store, 'POST', `/api/games/${id}/moves`, {
+    body: { from: first.from, to: first.to },
+    headers: { 'x-clitafl-token': bob.body.token },
+  });
+  assert.equal(steal.status, 401, "bob's token does not play alice's seat");
+
+  const asAlice = req(store, 'POST', `/api/games/${id}/moves`, {
+    body: { from: first.from, to: first.to },
+    headers: { 'x-clitafl-token': alice.body.token },
+  });
+  assert.equal(asAlice.status, 200, JSON.stringify(asAlice.body));
+  assert.equal(asAlice.body.game.turn, 'defender');
+  assert.equal(asAlice.body.played.length, 1, 'neither seat is the AI: nothing answers on its own');
+
+  const openAgain = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'attacker' } });
+  assert.equal(openAgain.status, 409, 'alice is in that seat already');
+
+  const resign = req(store, 'POST', `/api/games/${id}/resign`, {
+    body: { side: 'defender' },
+    headers: { 'x-clitafl-token': bob.body.token },
+  });
+  assert.equal(resign.status, 200, JSON.stringify(resign.body));
+  assert.equal(resign.body.game.winner, 'attacker');
+
+  const after = req(store, 'GET', '/api/lobby').body;
+  assert.equal(after.games.length, 0, 'a finished game is off the board');
+  const join = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'defender' } });
+  assert.equal(join.status, 409, 'and it is not for joining');
+});
+
+test('a seat handed to the AI, or back to the caller, gives its token up; a seat opened again needs a new one', () => {
+  const store = makeStore();
+  const opened = openGame(store, {
+    variant: 'tablut',
+    seats: { attacker: 'ai', defender: 'open' },
+    levels: 'easy',
+    time_ms: 30,
+  });
+  const id = opened.game.id;
+  const taken = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'defender', name: 'bot-7' } });
+  const token = taken.body.token;
+  const move = firstMoveOf(taken.body);
+
+  const toCaller = req(store, 'POST', `/api/games/${id}/seats`, {
+    body: { seats: { attacker: 'ai', defender: 'human' } },
+    headers: { 'x-clitafl-token': token },
+  });
+  assert.equal(toCaller.status, 200, JSON.stringify(toCaller.body));
+  assert.equal(toCaller.body.game.players.defender.guarded, false, 'the seat is an ordinary caller seat again');
+
+  const plain = req(store, 'POST', `/api/games/${id}/moves`, { body: { from: move.from, to: move.to } });
+  assert.equal(plain.status, 200, 'played without a token, as it was before anyone joined');
+
+  const opened2 = req(store, 'POST', `/api/games/${id}/seats`, { body: { seats: { attacker: 'ai', defender: 'open' } } });
+  assert.equal(opened2.status, 200, JSON.stringify(opened2.body));
+  assert.deepEqual(opened2.body.game.open_seats, ['defender']);
+  const stale = req(store, 'POST', `/api/games/${id}/moves`, {
+    body: { from: move.from, to: move.to },
+    headers: { 'x-clitafl-token': token },
+  });
+  assert.equal(stale.status, 409, 'the old token does not own an open seat');
+
+  const fresh = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'defender', name: 'bot-8' } });
+  assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
+  assert.notEqual(fresh.body.token, token, 'a new owner, a new token');
+  const oldToken = req(store, 'POST', `/api/games/${id}/moves`, {
+    body: { from: firstMoveOf(fresh.body).from, to: firstMoveOf(fresh.body).to },
+    headers: { 'x-clitafl-token': token },
+  });
+  assert.equal(oldToken.status, 401, 'and the old one is no token at all');
+});
+
+test('a seat token survives the state directory, and the seat and its name with it', () => {
+  const dir = tempDir('lobby');
+  try {
+    const store = makeStore({ stateDir: dir });
+    const opened = openGame(store, {
+      variant: 'tablut',
+      seats: { attacker: 'ai', defender: 'open' },
+      levels: 'easy',
+      time_ms: 30,
+    });
+    const id = opened.game.id;
+    const taken = req(store, 'POST', `/api/lobby/${id}/join`, { body: { seat: 'defender', name: 'bot-7' } });
+    const token = taken.body.token;
+
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf8'));
+    assert.equal(onDisk.session.tokens.defender, token, 'the file keeps the seat, its name and its token');
+    assert.equal(onDisk.session.names.defender, 'bot-7');
+    assert.equal(onDisk.session.open.defender, false);
+
+    const second = makeStore({ stateDir: dir });
+    assert.equal(req(second, 'GET', '/api/lobby').body.games.length, 0, 'a taken seat is not offered again');
+    const back = req(second, 'GET', `/api/games/${id}`).body.game;
+    assert.equal(back.players.defender.name, 'bot-7');
+    assert.equal(back.players.defender.guarded, true);
+
+    const move = firstMoveOf({ game: back });
+    assert.equal(req(second, 'POST', `/api/games/${id}/moves`, { body: { from: move.from, to: move.to } }).status, 401);
+    const played = req(second, 'POST', `/api/games/${id}/moves`, {
+      body: { from: move.from, to: move.to },
+      headers: { 'x-clitafl-token': token },
+    });
+    assert.equal(played.status, 200, JSON.stringify(played.body));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

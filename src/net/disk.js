@@ -27,6 +27,9 @@ function saveFile(session) {
     levels: session.levels,
     time_ms: session.timeMs,
     seed: session.seed,
+    tokens: session.tokens || null,
+    names: session.names || null,
+    open: session.open || null,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
   };

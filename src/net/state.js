@@ -116,6 +116,29 @@ function levelsView() {
 }
 
 /**
+ * Who plays each seat, in the shape a client reads it: the seat kind, the label the
+ * lobby gave it, whether a token guards it, and whether the seat is still open. The
+ * token itself is never in a view — the reply that mints it is the only place it appears.
+ */
+function playersView(session) {
+  const out = {};
+  for (const side of [SIDE_ATTACKER, SIDE_DEFENDER]) {
+    out[side] = {
+      seat: session.seats[side],
+      name: session.names ? session.names[side] : null,
+      guarded: Boolean(session.tokens && session.tokens[side]),
+      open: Boolean(session.open && session.open[side]),
+    };
+  }
+  return out;
+}
+
+/** The sides whose seat the lobby is offering. */
+function openSeatsView(session) {
+  return [SIDE_ATTACKER, SIDE_DEFENDER].filter((side) => session.open && session.open[side]);
+}
+
+/**
  * The public state of one game: enough for a board, a move list and a result,
  * and nothing that would need the rules table to interpret.
  */
@@ -136,6 +159,8 @@ function gameView(session, options = {}) {
     reason: game.reason,
     is_over: game.isGameOver(),
     seats: { attacker: session.seats[SIDE_ATTACKER], defender: session.seats[SIDE_DEFENDER] },
+    players: playersView(session),
+    open_seats: openSeatsView(session),
     levels: { attacker: session.levels[SIDE_ATTACKER], defender: session.levels[SIDE_DEFENDER] },
     time_ms: { attacker: session.timeMs[SIDE_ATTACKER], defender: session.timeMs[SIDE_DEFENDER] },
     seed: session.seed,
@@ -175,6 +200,8 @@ function summaryView(session) {
     status: game.status,
     winner: game.winner,
     seats: { attacker: session.seats[SIDE_ATTACKER], defender: session.seats[SIDE_DEFENDER] },
+    players: playersView(session),
+    open_seats: openSeatsView(session),
     levels: { attacker: session.levels[SIDE_ATTACKER], defender: session.levels[SIDE_DEFENDER] },
     created_at: session.createdAt,
     updated_at: session.updatedAt,
@@ -194,6 +221,8 @@ module.exports = {
   capturesView,
   plyView,
   levelsView,
+  playersView,
+  openSeatsView,
   gameView,
   summaryView,
   rulesText,

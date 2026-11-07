@@ -51,8 +51,8 @@ function cacheElements() {
     'board', 'turn', 'counts', 'status', 'variant-name', 'message', 'history',
     'btn-new', 'btn-swap', 'btn-hint', 'btn-ai', 'btn-undo', 'btn-resign', 'btn-export',
     'btn-refresh', 'btn-games', 'btn-copy', 'games', 'rules-text', 'rules-title',
-    'meta-id', 'meta-ply', 'meta-moves', 'meta-ai', 'levels-note', 'version',
-    'cmd-create', 'cmd-state', 'cmd-move', 'cmd-watch', 'cmd-index',
+    'meta-id', 'meta-ply', 'meta-moves', 'meta-ai', 'meta-seats', 'levels-note', 'version',
+    'cmd-create', 'cmd-state', 'cmd-move', 'cmd-lobby', 'cmd-watch', 'cmd-index',
   ].forEach((id) => { elements[id] = $(id); });
 }
 
@@ -240,6 +240,29 @@ function describeSquare(game, square, glyph) {
   return `${square}: ${names[glyph] || 'empty square'}${special ? ` on the ${special}` : ''}`;
 }
 
+/**
+ * `attackers: AI · defenders: you`, with the name the lobby gave a seat, and the
+ * honest label for a seat nobody has taken yet.
+ */
+function seatsLine(game) {
+  const players = game.players || {};
+  const label = (side) => {
+    const seat = players[side] || { seat: game.seats[side] };
+    const who = seat.open
+      ? 'open to the lobby'
+      : seat.seat === 'ai' ? 'AI'
+        : seat.name || (seat.guarded ? 'agent (its token plays it)' : 'you');
+    return `${side}s: ${who}`;
+  };
+  return ['attacker', 'defender'].map(label).join(' · ');
+}
+
+/** The side whose caller seat is guarded: a curl that plays it needs the token header. */
+function guardedSeat(game) {
+  if (!game || !game.players) return null;
+  return ['attacker', 'defender'].find((side) => game.players[side].guarded) || null;
+}
+
 function renderStatus() {
   const game = state.game;
   if (!game) return;
@@ -255,6 +278,7 @@ function renderStatus() {
     : `ply ${game.ply} / ${game.variant.max_plies || '∞'}`;
 
   elements['meta-id'].textContent = game.id;
+  elements['meta-seats'].textContent = seatsLine(game);
   elements['meta-ply'].textContent = `${game.ply} (${game.moves_played} in the record)`;
   elements['meta-moves'].textContent = `${game.legal_move_count}`;
   const ai = game.last_ai;
@@ -294,7 +318,10 @@ function renderCommands() {
   });
   elements['cmd-create'].value = `curl -s ${base}/api/games -X POST -H 'content-type: application/json' \\\n  -d '${body}'`;
   elements['cmd-state'].value = `curl -s ${base}/api/games/${id}`;
-  elements['cmd-move'].value = `curl -s ${base}/api/games/${id}/moves -X POST -H 'content-type: application/json' \\\n  -d '{"from":"${legal.from}","to":"${legal.to}"}'`;
+  const guarded = guardedSeat(state.game);
+  const tokenFlag = guarded ? ` \\\n  -H 'x-clitafl-token: <the ${guarded} seat token>'` : '';
+  elements['cmd-move'].value = `curl -s ${base}/api/games/${id}/moves -X POST -H 'content-type: application/json'${tokenFlag} \\\n  -d '{"from":"${legal.from}","to":"${legal.to}"}'`;
+  elements['cmd-lobby'].value = `curl -s ${base}/api/lobby`;
   elements['cmd-watch'].value = `curl -sN ${base}/api/games/${id}/events`;
   elements['cmd-index'].value = `curl -s ${base}/api`;
 }
@@ -547,11 +574,11 @@ function wire() {
     if (button) act('loading that game…', () => openGame(button.dataset.id));
   });
   elements['btn-copy'].addEventListener('click', async () => {
-    const areas = [elements['cmd-create'], elements['cmd-state'], elements['cmd-move'], elements['cmd-watch']];
+    const areas = [elements['cmd-create'], elements['cmd-state'], elements['cmd-move'], elements['cmd-lobby'], elements['cmd-watch']];
     const text = areas.map((area) => area.value).join('\n\n');
     try {
       await navigator.clipboard.writeText(text);
-      setMessage('the three commands are on your clipboard', 'ok');
+      setMessage('the commands are on your clipboard', 'ok');
     } catch {
       setMessage('select a box and copy by hand (the browser blocked the clipboard)', 'bad');
     }

@@ -1,6 +1,6 @@
 {
   "name": "clitafl",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "The ultimate Tafl game: six historical Viking board games (tablut, copenhagen, brandub, ard-ri, alea evangelii, tawlbwrdd) from 7x7 to 19x19, with a transposition-table search AI and an opening book, in the terminal, in the browser, and over an HTTP API that pushes every move to agents and watchers.",
   "main": "src/index.js",
   "bin": {

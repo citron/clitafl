@@ -193,9 +193,49 @@ test('a browser from another origin is allowed to call the API', async () => {
     assert.equal(preflight.status, 204);
     assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
     assert.match(preflight.headers.get('access-control-allow-methods'), /POST/);
+    assert.match(preflight.headers.get('access-control-allow-headers'), /x-clitafl-token/, 'a browser client may send a seat token');
 
     const get = await call(app, 'GET', '/api/levels');
     assert.equal(get.headers.get('access-control-allow-origin'), '*');
+  });
+});
+
+test('the lobby, and a seat token arriving as a header, over a socket', async () => {
+  await withApp({}, async (app) => {
+    const opened = await call(app, 'POST', '/api/games', {
+      variant: 'tablut',
+      seats: { attacker: 'ai', defender: 'open' },
+      levels: 'easy',
+      time_ms: 30,
+    });
+    assert.equal(opened.status, 201, opened.text);
+    const id = opened.body.game.id;
+    assert.deepEqual(opened.body.open_seats, ['defender']);
+
+    const board = await call(app, 'GET', '/api/lobby');
+    assert.equal(board.body.games[0].id, id, 'the game is on the board');
+    assert.equal(board.body.token_header, 'x-clitafl-token');
+
+    const join = await call(app, 'POST', `/api/lobby/${id}/join`, { seat: 'defender', name: 'bot-7' });
+    assert.equal(join.status, 200, join.text);
+    const token = join.body.token;
+    const move = join.body.game.legal_moves[0];
+
+    const asJson = async (value) => {
+      const response = await fetch(`${app.url}/api/games/${id}/moves`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-clitafl-token': value },
+        body: JSON.stringify({ from: move.from, to: move.to }),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+
+    const wrong = await asJson('not-the-token');
+    assert.equal(wrong.status, 401, 'a header that is not this seat is no token');
+
+    const mine = await asJson(token);
+    assert.equal(mine.status, 200, JSON.stringify(mine.body));
+    assert.ok(mine.body.played.length >= 2, 'the AI seat answers in the same reply, tokened seat as any other');
   });
 });
 

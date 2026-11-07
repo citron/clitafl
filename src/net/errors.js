@@ -11,9 +11,10 @@ class ApiError extends Error {
 }
 
 const badRequest = (message, details) => new ApiError(400, message, details);
+const unauthorized = (message, details) => new ApiError(401, message, details);
 const notFound = (message, details) => new ApiError(404, message, details);
 const conflict = (message, details) => new ApiError(409, message, details);
 const tooLarge = (message, details) => new ApiError(413, message, details);
 const serverError = (message, details) => new ApiError(500, message, details);
 
-module.exports = { ApiError, badRequest, notFound, conflict, tooLarge, serverError };
+module.exports = { ApiError, badRequest, unauthorized, notFound, conflict, tooLarge, serverError };

@@ -57,17 +57,24 @@
 
 ## `src/net/` — the web server and the API (no framework)
 
-- **errors.js** — `ApiError` plus the status helpers (`400`, `404`, `405` with an `allow`
-  list, `409`, `413`): a failure is one readable sentence, never a stack trace.
+- **errors.js** — `ApiError` plus the status helpers (`400`, `401`, `404`, `405`
+  with an `allow` list, `409`, `413`): a failure is one readable sentence, never a stack
+  trace.
 - **state.js** — the public JSON view of a session: `gameView` (turn, seats, levels,
-  clocks, counts, last move, record), `boardView` (rows, castles, throne, escapes),
-  `variantView`, `plyView`, `levelsView`, and `rulesText` — the CLI renderer with the
-  colours off.
-- **store.js** — the open games: ids, seats (`human | ai | agent`), levels and per-seat
-  clocks, `playAiPly`/`playAiSeats`, touch/TTL sweep, `maxGames` cap, seed and ply-limit
-  overrides, resume from a save file. It also carries the watchers: `subscribe(session,
-  sink)` / `publish(session, event, payload)` with a `maxWatchers` cap, a sink that throws
-  being dropped, and `announceClosed` before a game leaves the map. The sink is
+  clocks, counts, last move, record), `playersView` (who holds a seat: its kind, the name
+  the lobby gave it, whether a token guards it, whether it is still open), `openSeatsView`,
+  `boardView` (rows, castles, throne, escapes), `variantView`, `plyView`, `levelsView`, and
+  `rulesText` — the CLI renderer with the colours off. A view never carries a token.
+- **store.js** — the open games: ids, seats (`human | ai | agent | client | open`, the
+  aliases folding onto the caller's seat), levels and per-seat clocks,
+  `playAiPly`/`playAiSeats`, touch/TTL sweep, `maxGames` cap, seed and ply-limit overrides,
+  resume from a save file. Seats and tokens: `applySeats` hands a seat to the AI, the lobby
+  or the caller (a seat the AI takes, or one handed back anonymously, gives its token up),
+  `joinSeat` takes an open seat and mints the one token of this server, `requireSeat` says
+  whether a request holds the seat (`409` open, `401` unguarded), `listOpen` is the lobby's
+  list. It also carries the watchers: `subscribe(session, sink)` / `publish(session, event,
+  payload)` with a `maxWatchers` cap, a sink that throws being dropped, and `announceClosed`
+  before a game leaves the map. The sink is
   `(event, payload)`: the store knows nothing about HTTP, the framing is the server's.
   With `stateDir`, every game it changes is written out (`markDirty` marks, `touch`
   writes), and the directory is read back at startup: newest first, up to the slots, a
@@ -75,14 +82,20 @@
 - **disk.js** — one directory of games: `save` writes a game atomically (a temp file in
   the directory, then a rename), `remove` takes the file with the game, `loadAll` reads
   every file back, most recent first, skipping what is not a game. The file is the
-  `clitafl-save-v1` save plus a `session` key — seats, levels, clocks, seed, dates — so
-  the same file loads through `POST /api/games {"load": …}` and `--load` unchanged.
-- **api.js** — the route table and the handlers. `GET /api` describes every endpoint as
-  data, so a client can discover the game without reading a manual. One `announce` helper
-  is where a change is pushed — a `ply` event per move, then the `state` — and where a
-  game is marked as worth writing to the state directory.
-- **server.js** — `node:http`: `/api/*` to the API, everything else as files from `web/`
-  (resolve-then-check traversal guard), CORS, `OPTIONS`, a 1 MiB body cap, HEAD, JSON
+  `clitafl-save-v1` save plus a `session` key — seats, names, tokens, open seats, levels,
+  clocks, seed, dates — so the same file loads through `POST /api/games {"load": …}` and
+  `--load` unchanged, and a restart guards the seats as the first server did.
+- **api.js** — the route table (21 endpoints) and the handlers. `GET /api` describes every
+  endpoint as data, so a client can discover the game without reading a manual. The lobby is
+  here: `GET /api/lobby`, `GET /api/lobby/:id`, `POST /api/lobby/:id/join` — the join is the
+  only reply that shows a token. The seat guards read the `x-clitafl-token` header: a move
+  and a resignation for the seat it holds, `undo` and `seats` for the game it plays in, a
+  `hint` for nobody in particular. One `announce` helper is where a change is pushed — a
+  `ply` event per move, then the `state` — and where a game is marked as worth writing to
+  the state directory.
+- **server.js** — `node:http`: `/api/*` to the API (with `req.headers`, which is how a seat
+  token arrives), everything else as files from `web/` (resolve-then-check traversal guard),
+  CORS (including the token header), `OPTIONS`, a 1 MiB body cap, HEAD, JSON
   errors, `serve` that reports the address it bound. It owns the one route that is not a
   JSON answer — `GET /api/games/<id>/events` — so `sseFrame` and `openEventStream` live
   here: the state at once, every announced change, a `:ping` comment every 15 s, and the
@@ -104,14 +117,16 @@
 ## `web/` — the browser client (no build step)
 
 - **index.html** — board panel, setup card (variant, size, seat, level, thinking time),
-  this-game card, the agent card with the `curl` commands of the current game — including
+  this-game card (id, who holds each seat, ply, legal moves, what the AI last did), the
+  agent card with the `curl` commands of the current game — open, read, move, the lobby,
   the one that watches it — the rules, the list of open games.
 - **style.css** — the theme: a wooden board, round pieces, castle/throne/escape marks,
   hint and last-move highlights, a responsive two-column layout.
 - **app.js** — one `fetch` per action: it renders exactly what the API sends, clicks
   squares into moves from `legal_moves`, and never invents a rule of its own. It also
   opens an `EventSource` on the game it shows, so a move played from a terminal, a script
-  or another tab lands on the board by itself, and says so when the game is closed.
+  or another tab lands on the board by itself, and says so when the game is closed. The
+  move `curl` it prints carries `x-clitafl-token` when the game has a seat a token guards.
 
 ## `tests/` — `node:test`, run with `npm test`
 
@@ -140,7 +155,7 @@
   `--version`, bad command, `match`, `--record`, scripted games, `--load`, `serve` flag
   checks — port, TTL, `--max-watchers`, a `--state-dir` that cannot be made — and its
   banner).
-- **net.test.js** — 28 tests: the API as a function — the endpoint index, the catalogues
+- **net.test.js** — 32 tests: the API as a function — the endpoint index, the catalogues
   (including a 19×19 alea evangelii game with its 16 exits and citadel), opening a game,
   the move view (`from,to,piece,san`, the king named as such), `moves=turn|none|all`, an
   exchange with the AI answering, every way to send a move, every bad input, refusals
@@ -148,14 +163,20 @@
   rules text, the save round-trip, the game list, `max_games`, the TTL, unknown routes and
   verbs, the push watchers (a `ply` per move and the state after it, a seat change pushing
   and a hint not, the close on delete and on the TTL sweep, the watcher cap, and a sink
-  whose socket is gone being dropped), and the state directory: a game written as a save
+  whose socket is gone being dropped), the state directory: a game written as a save
   file at once and after every move, read back by a second store with its seats, levels,
   clocks and seed and played on, the file going with a DELETE and a sweep, the newest
-  games loaded first up to the slots, a broken file left alone, an old game pruned.
-- **server.test.js** — 13 tests: over a real socket — the page, CSS and JS, HEAD, traversal
-  probes, JSON over HTTP, CORS preflight, broken JSON, missing files, `405`, the body cap,
-  the game cap, `serve` on a free port, a state directory behind a live server (the file of
-  a game played over HTTP, `state_dir` in health, the file going with the game), the
+  games loaded first up to the slots, a broken file left alone, an old game pruned, and the
+  lobby: an open seat listed and joined once and then played by its token alone (`401`
+  without one, `409` while the seat is open, the token never in a state view), two agents
+  with one token each and neither playing the other's seat, a seat handed to the AI or back
+  to the caller giving its token up and a new owner getting a new one, and the seat, its
+  name and its token coming back off the state directory.
+- **server.test.js** — 14 tests: over a real socket — the page, CSS and JS, HEAD, traversal
+  probes, JSON over HTTP, CORS preflight (including the token header), broken JSON, missing
+  files, `405`, the body cap, the game cap, `serve` on a free port, a state directory behind
+  a live server (the file of a game played over HTTP, `state_dir` in health, the file going
+  with the game), the lobby and a seat token arriving as a header, the
   `serve` command of the CLI as a child process, played over HTTP and stopped with SIGTERM,
   and the event stream read frame by frame: the content type, the state it opens with, the
   `ply` and `state` a move produces, the `closed` frame that ends the response, the

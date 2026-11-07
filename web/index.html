@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>clitafl — the Tafl game of the Vikings</title>
-<meta name="description" content="Hnefatafl / Tafl in the browser: five historical variants, a search AI, and an HTTP API for agents.">
+<meta name="description" content="Hnefatafl / Tafl in the browser: six historical variants from 7x7 to 19x19, a search AI, and an HTTP API for agents.">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231b1410'/><text x='16' y='23' font-size='18' text-anchor='middle' fill='%23e8c07d'>♞</text></svg>">
 </head>
 <body>
 <header class="topbar">
   <h1>clitafl</h1>
-  <p class="tagline">Tafl in the browser — five historical variants, a search AI, an API for agents</p>
+  <p class="tagline">Tafl in the browser — six historical variants from 7×7 to 19×19, a search AI, an API for agents</p>
   <nav class="topnav">
     <a href="#play">board</a>
     <a href="#setup">new game</a>
@@ -114,12 +114,14 @@
       <h2>this game</h2>
       <dl class="meta">
         <dt>id</dt><dd id="meta-id">—</dd>
+        <dt>seats</dt><dd id="meta-seats">—</dd>
         <dt>ply</dt><dd id="meta-ply">0</dd>
         <dt>legal moves</dt><dd id="meta-moves">0</dd>
         <dt>AI last move</dt><dd id="meta-ai">—</dd>
       </dl>
       <p class="hint-text">a seat marked <code>agent / client</code> is played from outside the browser: the
-        <a href="#agent">API calls</a> below drive it.</p>
+        <a href="#agent">API calls</a> below drive it. A seat opened to the lobby is played only by the client
+        holding its token, which <code>GET /api/lobby</code> offers to whoever asks.</p>
     </section>
 
     <section id="agent" class="card">
@@ -136,6 +138,10 @@
       <label class="field">
         <span>play a move</span>
         <textarea id="cmd-move" rows="3" readonly spellcheck="false"></textarea>
+      </label>
+      <label class="field">
+        <span>the games with a seat going (the lobby: join takes the seat and its token)</span>
+        <textarea id="cmd-lobby" rows="2" readonly spellcheck="false"></textarea>
       </label>
       <label class="field">
         <span>watch every move as it happens (Server-Sent Events)</span>

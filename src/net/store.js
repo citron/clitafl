@@ -11,9 +11,13 @@ const { GameDirectory } = require('./disk');
 const { capturesView } = require('./state');
 const E = require('./errors');
 
-const SEAT_KINDS = ['human', 'ai', 'agent', 'client'];
-const SEAT_ALIASES = { agent: 'human', client: 'human' };
+const SEAT_KINDS = ['human', 'ai', 'agent', 'client', 'open'];
+// `agent` and `client` are both "the caller plays this", as `human` is. `open` is the
+// same seat with nobody in it yet — the lobby's seat: the first client to join it gets
+// the token that plays it, and a seat with a token is played by its token alone.
+const SEAT_ALIASES = { agent: 'human', client: 'human', open: 'human' };
 const MAX_THINK_MS = 30000;
+const TOKEN_HEADER = 'x-clitafl-token';
 
 const now = () => new Date().toISOString();
 const other = (side) => (side === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER);
@@ -21,6 +25,11 @@ const other = (side) => (side === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER)
 /** Short, url-friendly game id. */
 function newId() {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+}
+
+/** The secret of one seat: long enough to guess, short enough to put in a header. */
+function newToken() {
+  return crypto.randomBytes(12).toString('base64url');
 }
 
 function wholeNumber(value, name, min = 1) {
@@ -39,9 +48,18 @@ function milliseconds(value, name) {
 function seatKind(value, name) {
   const kind = String(value).toLowerCase();
   if (!SEAT_KINDS.includes(kind)) {
-    throw E.badRequest(`${name} expects human | ai | agent, got '${value}'`);
+    throw E.badRequest(`${name} expects human | ai | agent | client | open, got '${value}'`);
   }
   return SEAT_ALIASES[kind] || kind;
+}
+
+/** `attacker` / `defender` as a side, or a readable refusal. */
+function seatSide(value, name = 'seat') {
+  const side = String(value).toLowerCase();
+  if (side !== SIDE_ATTACKER && side !== SIDE_DEFENDER) {
+    throw E.badRequest(`${name} expects attacker | defender, got '${value}'`);
+  }
+  return side;
 }
 
 /** `{ attacker: 'human', defender: 'ai' }`; the default is a client playing the defenders. */
@@ -53,6 +71,43 @@ function seatsFrom(spec) {
     if (spec[side] !== undefined) seats[side] = seatKind(spec[side], `seats.${side}`);
   }
   return seats;
+}
+
+/**
+ * The sides whose seat the caller handed to the lobby (`"seats":{"defender":"open"}`),
+ * before the aliases fold the seat kinds together.
+ */
+function openSides(spec) {
+  const given = spec && typeof spec === 'object' ? spec : {};
+  return [SIDE_ATTACKER, SIDE_DEFENDER].filter(
+    (side) => String(given[side]).toLowerCase() === 'open',
+  );
+}
+
+/** `{ attacker: 'bot-7' }`, the labels a lobby shows next to a seat. */
+function namesFrom(spec) {
+  const names = { [SIDE_ATTACKER]: null, [SIDE_DEFENDER]: null };
+  if (!spec) return names;
+  if (typeof spec !== 'object') throw E.badRequest(`names expects { attacker, defender }, got '${spec}'`);
+  for (const side of [SIDE_ATTACKER, SIDE_DEFENDER]) {
+    if (spec[side] !== undefined && spec[side] !== null) {
+      const name = String(spec[side]).trim().slice(0, 40);
+      if (!name) throw E.badRequest(`names.${side} expects a name, got '${spec[side]}'`);
+      names[side] = name;
+    }
+  }
+  return names;
+}
+
+/**
+ * One value per side, read back off disk: a save file from an older server has no
+ * seats, tokens or names in it, and a game that predates them opens unguarded.
+ */
+function pairFrom(spec, read) {
+  const given = spec && typeof spec === 'object' ? spec : {};
+  const out = {};
+  for (const side of [SIDE_ATTACKER, SIDE_DEFENDER]) out[side] = read(given[side]);
+  return out;
 }
 
 /** Per-side strength, validated against the presets the AI knows. `'hard'` sets both seats. */
@@ -125,6 +180,9 @@ class GameStore {
       ? Math.floor(Math.random() * 1e9)
       : wholeNumber(spec.seed, 'seed', 0);
     const seats = seatsFrom(spec.seats);
+    const tokens = { [SIDE_ATTACKER]: null, [SIDE_DEFENDER]: null };
+    const open = { [SIDE_ATTACKER]: false, [SIDE_DEFENDER]: false };
+    for (const side of openSides(spec.seats)) open[side] = true;
     const levels = levelsFrom(spec.levels, spec.level);
     const globalTime = milliseconds(spec.time_ms ?? spec.timeMs ?? null, 'time_ms');
     const timeMs = {
@@ -136,6 +194,9 @@ class GameStore {
       id: newId(),
       game,
       seats,
+      tokens,
+      open,
+      names: namesFrom(spec.names),
       levels,
       timeMs,
       seed,
@@ -167,6 +228,80 @@ class GameStore {
   }
 
   list() { return [...this.games.values()]; }
+
+  /**
+   * Move seats to the AI, to the caller, or out to the lobby. Every move drops the
+   * seat's token, because `join` is the only way to own a seat, and a seat put back on
+   * the lobby loses the name its last owner left behind.
+   */
+  applySeats(session, spec, nameSpec) {
+    const seats = seatsFrom(spec);
+    const open = openSides(spec);
+    if (!session.tokens) session.tokens = { [SIDE_ATTACKER]: null, [SIDE_DEFENDER]: null };
+    if (!session.open) session.open = { [SIDE_ATTACKER]: false, [SIDE_DEFENDER]: false };
+    if (!session.names) session.names = { [SIDE_ATTACKER]: null, [SIDE_DEFENDER]: null };
+    for (const side of [SIDE_ATTACKER, SIDE_DEFENDER]) {
+      // A seat changing hands drops its token: `join` is the only way to own a seat.
+      session.tokens[side] = null;
+      session.open[side] = open.includes(side);
+      if (session.open[side]) session.names[side] = null;
+    }
+    if (nameSpec !== undefined) {
+      const names = namesFrom(nameSpec);
+      for (const side of [SIDE_ATTACKER, SIDE_DEFENDER]) {
+        if (names[side]) session.names[side] = names[side];
+      }
+    }
+    session.seats = seats;
+    this.markDirty(session);
+    return session;
+  }
+
+  /**
+   * Claim a seat the lobby is offering: the seat stops being open, gets a label and a
+   * token, and the token goes back in the reply — that is how an agent gets in.
+   */
+  joinSeat(session, seat, name = null) {
+    const side = seatSide(seat, 'seat');
+    if (session.game.isGameOver()) {
+      throw E.conflict(`the game is over (${session.game.status}${session.game.reason ? `: ${session.game.reason}` : ''})`);
+    }
+    if (!session.open[side]) {
+      const who = session.names[side] ? ` (it is held by '${session.names[side]}')` : '';
+      throw E.conflict(`the ${side} seat is not open${who}: POST /api/lobby lists the games that have a seat going`);
+    }
+    session.open[side] = false;
+    session.names[side] = name === null || name === undefined ? null : namesFrom({ [side]: name })[side];
+    session.tokens[side] = newToken();
+    this.markDirty(session);
+    return { side, token: session.tokens[side], name: session.names[side] };
+  }
+
+  /**
+   * A seat with a token is played by the one client holding it: without the header the
+   * request is not the seat's owner, and an open seat is played by nobody at all.
+   */
+  requireSeat(session, side, token) {
+    if (session.open && session.open[side]) {
+      throw E.conflict(
+        `the ${side} seat is open: take it with POST /api/lobby/${session.id}/join {"seat":"${side}"}`,
+      );
+    }
+    if (session.tokens && session.tokens[side] && session.tokens[side] !== token) {
+      throw E.unauthorized(
+        `the ${side} seat is played by a named agent: send its token as ${TOKEN_HEADER} (the token came from POST /api/games, POST /api/lobby/:id/join or POST /api/games/:id/seats)`,
+      );
+    }
+    return session;
+  }
+
+  /** Games with a seat the lobby can offer. */
+  listOpen() {
+    return this.list().filter(
+      (session) => !session.game.isGameOver()
+        && [SIDE_ATTACKER, SIDE_DEFENDER].some((side) => session.open && session.open[side]),
+    );
+  }
 
   touch(session) {
     session.updatedAt = now();
@@ -218,6 +353,9 @@ class GameStore {
       id: entry.id,
       game,
       seats: seatsFrom(meta.seats),
+      tokens: pairFrom(meta.tokens, (value) => (typeof value === 'string' && value ? value : null)),
+      open: pairFrom(meta.open, (value) => value === true),
+      names: pairFrom(meta.names, (value) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, 40) : null)),
       levels: levelsFrom(meta.levels),
       timeMs: {
         [SIDE_ATTACKER]: milliseconds(time[SIDE_ATTACKER] ?? this.defaultTimeMs, 'time_ms_a'),
@@ -375,6 +513,7 @@ class GameStore {
 module.exports = {
   GameStore,
   SEAT_KINDS,
+  TOKEN_HEADER,
   seatsFrom,
   levelsFrom,
   other,
