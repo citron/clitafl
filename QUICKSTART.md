@@ -15,7 +15,7 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 150 tests.
+`npm start` does the same as the first line. `npm test` runs the 157 tests.
 
 ## Play in the browser
 
@@ -130,9 +130,13 @@ Works on any terminal, and honours `NO_COLOR`.
 ## Rules in one paragraph
 
 All pieces slide like a rook and never jump. A soldier is captured when two enemies sit on
-opposite sides of it; the board edge and empty castle squares can stand in for a captor
-where the variant says so. The defenders win when the king steps on an escape square (an
-edge, a corner, or the 16 marked squares of the alea evangelii), the attackers when they
-take the king — with 2, 3 or 4 men around him depending on the variant and on whether he
-stands beside or on a castle — and the fetlar games also let them win by sealing the king
-and every defender in. Read the exact counts for the variant you play with `rules <name>`.
+opposite sides of it, and an empty castle square can stand in for a captor. The board edge
+stands in for one too — except in the Copenhagen game, whose rule 5 says the edge is not
+hostile, and which takes a line of men at the edge with the shield wall of rule 7 instead.
+The defenders win when the king steps on an escape square (an edge, a corner, or the 16
+marked squares of the alea evangelii); the attackers when they take the king — with 2, 3
+or 4 men around him, the count raised on the throne and next to it. The Copenhagen game
+also lets the attackers win by sealing the king and every defender in (rule 12), and by
+the move limit of rule 13: 100 / 140 / 160 moves on the 7 / 11 / 13 boards, and the
+attackers win when it is reached. Read the exact rules for the variant you play with
+`rules <name>`.

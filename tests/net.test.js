@@ -98,6 +98,24 @@ test('the catalogue endpoints list variants, sizes and levels', () => {
   assert.equal(one.variant.id, 'copenhagen');
   assert.match(one.rules_text, /castle/i);
 
+  const cp = one.variant;
+  assert.equal(cp.castles, 'throne-corners', 'rule 3: the throne and the four corners are the marked squares');
+  assert.equal(cp.castle_shield, 'both', 'an empty marked square is a captor for both sides');
+  assert.equal(cp.edge_shield, false, 'rule 5: the edge of the board is not hostile');
+  assert.equal(cp.king_safe_on_edge, true, 'the king is safe on the edge');
+  assert.equal(cp.king_back_on_throne, true, 'rules 1 and 8: the king goes back onto his throne');
+  assert.equal(cp.shield_wall, true, 'rule 7: a line of men at the edge falls to the shield wall');
+  assert.equal(cp.win_by_siege, true, 'rule 12: sealing the king and his host wins');
+  assert.equal(cp.no_move, 'loss', 'a defender with no legal move loses');
+  assert.equal(cp.max_plies, 280, 'rule 13: 140 moves on the 11x11 board');
+  assert.equal(cp.overrun, 'attackers-win', 'rule 13: reach the limit and the attackers win');
+
+  const tablut = req(store, 'GET', '/api/variants/tablut').body.variant;
+  assert.equal(tablut.castles, 'throne', 'Linnaeus names one castle: the throne');
+  assert.equal(tablut.shield_wall, false);
+  assert.equal(tablut.king_back_on_throne, false, 'the tablut king is barred from every castle, rule 5');
+  assert.equal(tablut.overrun, 'draw', 'only copenhagen gives the game away at the limit');
+
   const levels = req(store, 'GET', '/api/levels').body;
   assert.deepEqual(levels.levels.map((l) => l.id), ['easy', 'medium', 'hard', 'grandmaster']);
   assert.ok(levels.levels.every((l) => l.label && l.depth > 0 && l.time_ms > 0));
@@ -561,15 +579,22 @@ test('a hint, too, obeys the ceiling of the call that asks for it', () => {
   const cheap = req(store, 'POST', `/api/games/${id}/hint`, { body: { max_nodes: 3000, max_depth: 40, time_ms: 60000 } });
   assert.equal(cheap.status, 200, JSON.stringify(cheap.body));
   assert.equal(cheap.body.hint.source, 'search', 'the hint is a search, not the book');
-  assert.ok(cheap.body.hint.nodes >= 3000 && cheap.body.hint.nodes < 6000, `a hint spends the ceiling of the call that asks for it: ${cheap.body.hint.nodes}`);
+  assert.ok(cheap.body.hint.nodes < 6000, `a hint stays under the ceiling of the call that asks for it: ${cheap.body.hint.nodes}`);
   assert.equal(cheap.body.hint.max_nodes, 3000, 'the hint says the ceiling it searched under');
   assert.equal(cheap.body.game.budget.attacker.max_nodes, 0, 'a hint spends no ceiling the game carries');
+
+  // A ceiling is a ceiling, not a floor: a shallow budget can be spent by a
+  // search that finishes early. Ask for real work and the hint spends it.
+  const deep = req(store, 'POST', `/api/games/${id}/hint`, { body: { max_nodes: 40000, max_depth: 40, time_ms: 60000 } });
+  assert.equal(deep.status, 200, JSON.stringify(deep.body));
+  assert.ok(deep.body.hint.nodes >= 40000 && deep.body.hint.nodes < 80000, `a deep hint costs the work it asked for: ${deep.body.hint.nodes}`);
 
   const before = cheap.body.game.ply;
   const shallow = req(store, 'POST', `/api/games/${id}/hint`, { body: { max_depth: 1, max_nodes: 0, time_ms: 60000 } });
   assert.equal(shallow.status, 200, JSON.stringify(shallow.body));
   assert.equal(shallow.body.hint.depth, 1, 'a depth ceiling is the last word on how deep the search goes');
   assert.equal(shallow.body.game.ply, before, 'and a hint touches no board');
+  assert.equal(shallow.body.hint.max_nodes, 0, 'a hint names the ceiling of its own call, the deep one does not leak');
 });
 
 test('a full exchange between the AI seats is a list of plies with captures described', () => {

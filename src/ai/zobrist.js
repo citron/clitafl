@@ -61,7 +61,15 @@ function hashBoard(board, turn) {
 
 /** Mix a board geometry (variant + size) into a root key. */
 function geometryId(variant) {
-  const text = `${variant.castles}|${variant.escape}|${variant.size}|${variant.edgeShield ? 1 : 0}|${variant.castleShield}`;
+  const text = [
+    variant.castles,
+    variant.escape,
+    variant.size,
+    variant.edgeShield ? 1 : 0,
+    variant.castleShield,
+    variant.kingBackOnThrone ? 1 : 0,
+    variant.shieldWall ? 1 : 0,
+  ].join('|');
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) {
     h ^= text.charCodeAt(i);

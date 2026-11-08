@@ -25,7 +25,7 @@ test('tablut setup matches the historical army', () => {
   assert.equal(board.get(4, 4), KING);
   assert.equal(board.get(0, 4), ATTACKER, 'attacker on the edge midpoint');
   assert.equal(board.get(3, 4), DEFENDER, 'defender beside the castle');
-  assert.equal(board.get(0, 0), EMPTY, 'corner fort stays empty');
+  assert.equal(board.get(0, 0), EMPTY, 'the corner is plain board, and empty');
 });
 
 test('copenhagen setup: 12 defenders plus king, 24 attackers', () => {
@@ -48,17 +48,22 @@ test('brandub and ard-ri piece counts follow their sources', () => {
 test('castle squares and escape squares follow the variant, not a hardcoded layout', () => {
   const tablut = Board.fromVariant(getVariant('tablut'));
   assert.equal(tablut.isCastle(4, 4), true, 'the throne is a castle');
-  assert.equal(tablut.isCastle(0, 0), true, 'corners are forts');
+  assert.equal(tablut.isCastle(0, 0), false, 'the board has no corner forts');
+  assert.equal(tablut.isEscapeSquare(0, 0), true, 'a corner is an edge square, so an exit');
   assert.equal(tablut.isEscapeSquare(0, 4), true, 'edge square');
   assert.equal(tablut.isEscapeSquare(4, 4), false, 'throne is not an escape square');
 
   const cph = Board.fromVariant(getVariant('copenhagen'));
   assert.equal(cph.isEscapeSquare(0, 0), true, 'corners are the escapes');
   assert.equal(cph.isEscapeSquare(0, 5), false, 'edge midpoint is not an escape');
-  assert.equal(cph.isCastle(5, 5), true);
+  assert.equal(cph.isCastle(5, 5), true, 'the throne is a fort');
+  assert.equal(cph.isCastle(0, 0), true, 'the corners are forts');
 
+  // Brandub rule 3: the centre and the four corners are marked squares.
   const brandub = Board.fromVariant(getVariant('brandub'));
-  assert.equal(brandub.isCastle(3, 3), false, 'brandub has no special squares');
+  assert.equal(brandub.isCastle(3, 3), true, 'the centre is a marked square');
+  assert.equal(brandub.isCastle(0, 6), true, 'the corners are marked squares');
+  assert.equal(brandub.isCastle(2, 2), false, 'a plain square is not');
 });
 
 test('movement is rook-like and blocked by pieces', () => {
@@ -98,7 +103,13 @@ test('nobody may land on the throne, the king may enter escape castles', () => {
   board.set(4, 4, EMPTY);
   assert.equal(board.isLegalMove(idx(9, 4, 0), idx(9, 4, 3), SIDE_DEFENDER), true);
   assert.equal(board.isLegalMove(idx(9, 4, 0), idx(9, 4, 4), SIDE_DEFENDER), false, 'the castle is off limits');
-  assert.equal(board.isLegalMove(idx(9, 4, 0), idx(9, 0, 0), SIDE_DEFENDER), false, 'a fort is off limits to soldiers');
+  assert.equal(board.isLegalMove(idx(9, 4, 0), idx(9, 0, 0), SIDE_DEFENDER), true, 'tablut has no corner forts');
+  const lane = board.movesFrom(4, 0).map((m) => [board.rowOf(m.to), board.colOf(m.to)]);
+  assert.deepEqual(
+    lane.filter(([r, c]) => r === 4 && c > 4).map(([, c]) => c),
+    [5, 6, 7, 8],
+    'the throne is not a wall: a man walks past it, he only may not stop on it',
+  );
 });
 
 test('a castle square that is an escape target is reserved for the king', () => {
@@ -441,4 +452,205 @@ test('board sizes run from 7 to 19 and stay odd', () => {
   assert.throws(() => getVariant('tablut', 21), /between 7 and 19/);
   assert.throws(() => getVariant('tablut', 5), /between 7 and 19/);
   assert.throws(() => getVariant('tablut', 8), /must be odd/);
+});
+
+// ---------------------------------------------------------------------------
+// Rule details pinned down from the sources: tafl.cyningstan.com (the 13 tablut
+// and 13 copenhagen articles, the 12 brandub and 12 alea rules), aagenielsen.dk
+// and hnefatafl.org.
+// ---------------------------------------------------------------------------
+
+test('the copenhagen edge is not a captor', () => {
+  // Copenhagen rule 5: the edge of the board is not hostile, so a man pressed
+  // against it by a single enemy survives. Tawlbwrdd keeps the ordinary wall.
+  const cph = makeBoard('copenhagen', [
+    '..D........',
+    '..A........',
+    '...........',
+    '...........',
+    '...........',
+    '.....K.....',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+  ]);
+  assert.equal(cph.isSurrounded(0, 2, DEFENDER, SIDE_ATTACKER), false, 'the edge does not take him');
+
+  const tawlbwrdd = makeBoard('tawlbwrdd', [
+    '..D........',
+    '..A........',
+    '...........',
+    '...........',
+    '...........',
+    '.....K.....',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+  ]);
+  assert.equal(tawlbwrdd.isSurrounded(0, 2, DEFENDER, SIDE_ATTACKER), true, 'there the edge is a captor');
+});
+
+test('the king returns to his copenhagen throne, and never to the tablut one', () => {
+  // Copenhagen rule 1 ("the king may move onto these squares") and rule 8 ("if
+  // the king returns to the fort, the game continues"); tablut rule 5 ("the king
+  // is barred from entering the castle, including the throne square").
+  const cph = makeBoard('copenhagen', [
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '....K......',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+  ]);
+  assert.equal(cph.isLegalMove(idx(11, 5, 4), idx(11, 5, 5), SIDE_DEFENDER), true, 'the king lands on his fort');
+  assert.equal(cph.isLegalMove(idx(11, 5, 4), idx(11, 5, 9), SIDE_DEFENDER), true, 'and on plain squares as usual');
+
+  const soldier = makeBoard('copenhagen', [
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '....D......',
+    '...........',
+    '.....K.....',
+    '...........',
+    '...........',
+    '...........',
+  ]);
+  assert.equal(soldier.isLegalMove(idx(11, 5, 4), idx(11, 5, 5), SIDE_DEFENDER), false, 'a defender never enters the fort');
+
+  const tab = makeBoard('tablut', [
+    '.........',
+    '.........',
+    '.........',
+    '....K....',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+    '.........',
+  ]);
+  assert.equal(tab.isLegalMove(idx(9, 3, 4), idx(9, 4, 4), SIDE_DEFENDER), false, 'tablut: the king stays out of the castle');
+});
+
+test('the shield wall takes a line of men at the edge', () => {
+  // Copenhagen rule 7: the attacker plays the man that closes the row, and the
+  // four defenders shut in against the top edge fall.
+  const board = makeBoard('copenhagen', [
+    '...DDDDA...',
+    '...AAAA....',
+    '...........',
+    '...........',
+    '...........',
+    '.....K.....',
+    '...........',
+    '...........',
+    '..A........',
+    '...........',
+    '...........',
+  ]);
+  const from = idx(11, 8, 2);
+  const to = idx(11, 0, 2);
+  assert.equal(board.isLegalMove(from, to, SIDE_ATTACKER), true, 'the lane up the file is open');
+  const taken = board.applyMove({ from, to }).captured
+    .map((cap) => [board.rowOf(cap.i), board.colOf(cap.i)]).sort((a, b) => a[1] - b[1]);
+  assert.deepEqual(taken, [[0, 3], [0, 4], [0, 5], [0, 6]], 'the whole wall of defenders falls');
+});
+
+test('the shield wall needs a line, a bracket, and every man pressed from the inside', () => {
+  const single = makeBoard('copenhagen', [
+    '..........D',
+    '..........A',
+    '...........',
+    '...........',
+    '...........',
+    '.....K.....',
+    '...........',
+    '...........',
+    '.........A.',
+    '...........',
+    '...........',
+  ]);
+  assert.deepEqual(
+    single.applyMove({ from: idx(11, 8, 9), to: idx(11, 0, 9) }).captured,
+    [],
+    'one man alone in the corner is not a line',
+  );
+
+  const openEnd = makeBoard('copenhagen', [
+    '...DDD.....',
+    '...AAA.....',
+    '...........',
+    '...........',
+    '...........',
+    '.....K.....',
+    '...........',
+    '...........',
+    '..A........',
+    '...........',
+    '...........',
+  ]);
+  assert.deepEqual(
+    openEnd.applyMove({ from: idx(11, 8, 2), to: idx(11, 0, 2) }).captured,
+    [],
+    'the far end of the line is open, so nothing falls',
+  );
+
+  const kingInLine = makeBoard('copenhagen', [
+    '...DKDDA...',
+    '...AAAA....',
+    '...........',
+    '...........',
+    '...........',
+    '.....K.....',
+    '...........',
+    '...........',
+    '..A........',
+    '...........',
+    '...........',
+  ]);
+  const res = kingInLine.applyMove({ from: idx(11, 8, 2), to: idx(11, 0, 2) });
+  assert.deepEqual(res.captured, [], 'the wall stops at the king, who falls to the plain rule only');
+});
+
+test('the throne alone raises the garrison around the king', () => {
+  // The sources raise the count for the throne ("four on the castle, three next
+  // to it"), never for the other marked squares: a king tucked beside a corner
+  // fort is taken the ordinary way in brandub, and in copenhagen the corner fort
+  // does not bring the four attackers down to three.
+  const brandub = makeBoard('brandub', [
+    '.KA....',
+    '.......',
+    '.......',
+    '.......',
+    '.......',
+    '.......',
+    '.......',
+  ]);
+  assert.equal(brandub.isSurrounded(0, 1, KING, SIDE_ATTACKER), true, 'the empty corner fort and one attacker take the king');
+
+  const cph = makeBoard('copenhagen', [
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '...........',
+    '..........A',
+    '.........AK',
+    '...........',
+  ]);
+  assert.equal(cph.isSurrounded(9, 10, KING, SIDE_ATTACKER), false, 'the corner fort and two attackers are not four');
 });

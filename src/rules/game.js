@@ -117,7 +117,17 @@ class Game {
       return this.finish(STATUS_DRAW, null, 'Draw: the position is repeated.');
     }
     if (variant.maxPlies && this.ply >= variant.maxPlies) {
-      return this.finish(STATUS_DRAW, null, `Draw: ${variant.maxPlies} plies played.`);
+      // Copenhagen rule 13: after 100 / 140 / 160 moves the attackers win, the
+      // defenders have run out of time. Everywhere else the limit is a draw.
+      const moves = Math.ceil(this.ply / 2);
+      if (variant.overrun === 'attackers-win') {
+        return this.finish(
+          STATUS_ATTACKERS_WIN,
+          SIDE_ATTACKER,
+          `Attackers win: ${moves} moves (${this.ply} plies) played, the defenders ran out of time.`,
+        );
+      }
+      return this.finish(STATUS_DRAW, null, `Draw: ${this.ply} plies (${moves} moves) played.`);
     }
     return null;
   }

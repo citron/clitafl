@@ -4,18 +4,23 @@
 
 - **pieces.js** — piece codes (`KING`, `DEFENDER`, `ATTACKER`, `EMPTY`) and side codes; the
   vocabulary every other module uses. ASCII codes only, never emoji.
-- **variants.js** — the six rule sets as data: escape target (`edge`, `corner`, the marked
-  `cornerblock` of alea evangelii), castle layout, king-capture counts (open field / beside
-  a castle / on a castle), who may land on a castle, first mover, edge shield, edge
-  capture, siege win, no-move and repetition rules, ply limit, plus `buildSetup`/`armyOf`,
-  the symmetric position generator that makes `--size` work.
+- **variants.js** — the six rule sets as data, one entry per rule the sources state: escape
+  target (`edge`, `corner`, the marked `cornerblock` of alea evangelii), castle layout,
+  king-capture counts (open field / next to the throne / on the throne), who may land on a
+  castle and the king's way back onto his own throne (`kingBackOnThrone`, copenhagen rules 1
+  and 8), first mover, edge shield (`edgeShield` — copenhagen rule 5 says the edge is not
+  hostile), the shield wall (`shieldWall`, rule 7), siege win, no-move and repetition rules,
+  the move limit (`maxPlies`, and `moveLimitFor` where the rules state it per size) with
+  what reaching it means (`overrun`), plus `buildSetup`/`armyOf`, the symmetric position
+  generator that makes `--size` work.
 - **board.js** — the grid, geometry (`rowOf`, `idx`), rook movement, castle and throne
   rules, king-only escape squares, custodian capture (soldiers, king counts, castle and
-  edge shields), the siege flood fill, `applyMove`/`undoMove` as exact inverses — the
-  king's escape settles before a capture can — serialisation.
+  edge shields) and the Copenhagen shield wall (`shieldWallCaptures`), the siege flood
+  fill, `applyMove`/`undoMove` as exact inverses — the king's escape settles before a
+  capture can — serialisation.
 - **game.js** — the state machine: turns, `play`, victory and draw detection in a fixed
-  order (king capture → escape → siege → no legal move → repetition → ply limit), `undo`,
-  `serialize`/`deserialize`.
+  order (king capture → escape → siege → no legal move → repetition → move limit, which is
+  a win for the attackers where the rules say so), `undo`, `serialize`/`deserialize`.
 - **notation.js** — `d5-d6` in and out, tolerant of the ways players type it.
 
 ## `src/ai/`
@@ -149,13 +154,19 @@
 ## `tests/` — `node:test`, run with `npm test`
 
 - **helpers.js** — builds a board from ASCII rows (`makeBoard`), plus `idx` and `move`.
-- **board.test.js** — 24 tests: the historical armies, castle and escape geometry,
-  movement, capture counts, edge rules, apply/undo, serialisation, the siege sealing, and
-  the alea evangelii geometry: its army and symmetry, the 16 exits with king-only entry, the
+- **board.test.js** — 29 tests: the historical armies, castle and escape geometry,
+  movement, capture counts, edge rules, apply/undo, serialisation, the siege sealing, the
+  alea evangelii geometry (its army and symmetry, the 16 exits with king-only entry, the
   citadel off limits to everyone and passable when empty, the 4/3/2 king capture, marked
-  squares and the edge capturing soldiers, and the escape settling before a capture.
-- **game.test.js** — 14 tests: first mover, escapes, king capture, illegal moves, the
-  siege, no-legal-move rules, repetition, ply limit, undo, save round-trips.
+  squares and the edge capturing soldiers, the escape settling before a capture), and the
+  rule details the sources spell out: the copenhagen edge that does not capture (rule 5)
+  against the tawlbwrdd edge that does, the king who returns to his copenhagen throne and
+  never to the tablut one (copenhagen rules 1 and 8, tablut rule 5), the shield wall
+  (copenhagen rule 7) taking a line of men at the edge and needing the line, the bracket and
+  every man pressed from the inside, and the garrison count raised for the throne alone.
+- **game.test.js** — 16 tests: first mover, escapes, king capture, illegal moves, the
+  siege, no-legal-move rules, repetition, the move limit as a draw and as a copenhagen
+  attackers win (rule 13), the limit following the size, undo, save round-trips.
 - **notation.test.js** — 6 tests: squares, every spelling of a move, large boards, errors.
 - **ai.test.js** — 16 tests: level presets, mate in one, taking the escape, legality in
   every variant, time budget, depth monotonicity, seeded reproducibility, the capture
@@ -177,7 +188,9 @@
   flag checks — port, TTL, `--max-watchers`, a `--state-dir` that cannot be made — and its
   banner).
 - **net.test.js** — 35 tests: the API as a function — the endpoint index, the catalogues
-  (including a 19×19 alea evangelii game with its 16 exits and citadel), opening a game,
+  (the copenhagen variant answering its rule flags — the shield wall, the king back on his
+  throne, the edge that does not capture, the move limit and the attackers win at it — and
+  a 19×19 alea evangelii game with its 16 exits and citadel), opening a game,
   the move view (`from,to,piece,san`, the king named as such), `moves=turn|none|all`, an
   exchange with the AI answering, every way to send a move, every bad input, refusals
   (`409`), the AI seat playing n plies or all, hints, undo, resign, seats, the record, the

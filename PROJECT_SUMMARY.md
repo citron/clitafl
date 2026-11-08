@@ -8,7 +8,7 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-150 tests · 22 source files + 3 web files · ~5 900 lines of engine, AI, UI, CLI and server
+157 tests · 22 source files + 3 web files · ~5 900 lines of engine, AI, UI, CLI and server
 (~9 100 with the tests)
 ```
 
@@ -28,7 +28,7 @@ Everything on that list is fixed:
 | tests needed jest (`npm test` broken) | one runner: `node --test`, no download |
 | the AI scored moves 1 ply deep and called it minimax | negamax + alpha-beta + iterative deepening + time budget, real mate lines, four documented levels |
 | one fixed 11×11 position, defenders moving first | sourced variants in a declarative rule table, symmetric setup generator, `--size` for odd boards 7–19, attackers open every game |
-| rules hardcoded (corner escape, 4-attacker king, edge as captor) | castle layouts, empty-castle captors, per-variant king-capture counts, edge shield, siege win, no-move and repetition rules, ply limit |
+| rules hardcoded (corner escape, 4-attacker king, edge as captor) | castle layouts, empty-castle captors, per-variant king-capture counts, edge shield, siege win, no-move and repetition rules, move limit |
 | captures were applied on cloned boards | apply/undo in place, exact inverses, covered by tests |
 | docs and README claimed features that were not there | README, QUICKSTART, FILES and this file describe the shipped code, and the CLI is covered by tests that run it |
 | the renderer wrote to a shared board while animating | animation draws on a copy; a test asserts the game board is untouched |
@@ -59,11 +59,11 @@ and a search that could see through a capture.
 
 | need | now |
 | --- | --- |
-| the 19×19 alea evangelii was not in the game | the sixth variant, from the twelve rules copied next to the diagram in Cambridge, CCC MS 122: king + 24 dukes vs 48 counts, a central citadel nobody may land on, 16 marked corner squares as the only exits, the king captured by 4 men on the citadel, 3 beside a castle, 2 in the open field, marked squares and the edge capturing for both sides, 600-ply limit |
+| the 19×19 alea evangelii was not in the game | the sixth variant, from the twelve rules copied next to the diagram in Cambridge, CCC MS 122: king + 24 dukes vs 48 counts, a central citadel nobody may land on, 16 marked corner squares as the only exits, the king captured by 4 men on the citadel, 3 next to it, 2 in the open field, marked squares and the edge capturing for both sides, 600-ply limit |
 | the king standing on an exit could be taken on the square he escaped to | `applyMove` reports the escape before captures are resolved, and a king on an escape square is not capturable; a test plays that exact position |
 | the search stopped at the depth edge, so a snapshot evaluation counted a piece that was about to be taken | a capture-only quiescence search (depth 4, 12 moves wide) follows every move that takes a piece |
 | the same position was re-searched from scratch | a Zobrist key updated in place across a move with its captures, and a per-player transposition table with ply-relative mate scores |
-| the strong levels opened randomly | a seeded opening book (`src/ai/book.json`, 411 positions, 10 plies, `node tools/make-book.js`), each suggestion checked against the legal moves |
+| the strong levels opened randomly | a seeded opening book (`src/ai/book.json`, 428 positions, 10 plies, `node tools/make-book.js`), each suggestion checked against the legal moves |
 | "reproducible" depended on how fast the machine was | a node budget (`maxNodes`): the search stops on a count and never reads the clock, so a seeded `match` replays ply for ply |
 | search nodes allocated move lists | killer moves per ply, capture counts predicted from the same `DIR_PAIRS` the board uses, and a test that compares the prediction with the board for every legal move of every variant |
 
@@ -126,6 +126,31 @@ a client had no number to plan around. The roadmap asked for a predictable ceili
 | a seat that outlives its ceiling | the ceilings ride in the save file, so a restarted server plays a game with the budget it was given, and `POST /seats` replaces the set it is handed |
 | a ceiling the search ignores | a depth ceiling is the last word on how deep the iterative deepening goes, so a cheap move stays inside the node ceiling it was given |
 
+## Why version 2.7 exists
+
+The rule sets were the historical ones, but the claim had never been checked article by
+article against the texts, and the engine played a few of them loosely. Every flag in
+`src/rules/variants.js` went back to the sources — the 13 tablut and 13 Copenhagen
+articles and the 12 brandub and 12 alea evangelii rules at tafl.cyningstan.com,
+aagenielsen.dk and hnefatafl.org — and the engine moved to what they say.
+
+| problem | now |
+| --- | --- |
+| rule claims paraphrased from secondary sources | every variant names the articles it implements, in its own `source` field, in the README and in the rules text the CLI and the API answer, and seven new tests pin the details that were loose |
+| copenhagen played the board edge as a captor | rule 5 — *the edge of the board is not hostile* — so a man pressed against the edge by one enemy survives: `edgeShield: false` |
+| copenhagen had no way to take a line of men at the edge | rule 7, the shield wall: a line of two or more enemy men along an edge line, walled in at one end, falls when the man that just moved brackets the other end and presses every man of the line from the inside (`Board.shieldWallCaptures`); the king is not part of the wall |
+| the king could never go back to his fort | copenhagen rules 1 and 8: `kingBackOnThrone` lets the king land on his throne again while every other man stays out of it; tablut rule 5 keeps the throne shut for the king himself |
+| the garrison count was raised around every castle square | the texts raise it for the throne alone — *four on the castle, three next to it* — so `kingCaptureNeed` is scoped to the throne, and a king beside a corner fort is taken the ordinary way, the empty fort standing for one attacker |
+| the tablut board carried corner forts | Linnaeus names one castle, the throne: `castles: 'throne'`, and every edge square, the corners included, is an exit |
+| brandub carried no marked squares | rule 3 marks the centre and the four corners and rule 9 makes them captors: `castles: 'throne-corners'`, `castleShield: 'both'` |
+| one move limit for every copenhagen board | rule 13 gives 100 / 140 / 160 moves on the 7 / 11 / 13 boards, and the attackers win when it is reached: `moveLimitFor` + `overrun: 'attackers-win'`, carried over to the size `--size` asks for |
+| the rules had never been played as a whole | self-play checked ply by ply against an independent model of the geometry and the captures — legal moves, every capture, the king's count and escape, castle entry, material, turn, undo and replay, save round-trip: 278 games at full AI strength, and 76 000 more at random and greedy speed, more than 6 million plies, no violation |
+| three rules of the texts have no rule text to play | documented as gaps, not faked: copenhagen rule 11 (the exit fort, which the modern rule sets name and never describe), copenhagen rule 10 (the ban on repeating the same position for ever), the tablut *raichi* warning |
+
+The opening book was regenerated on the new geometry (428 positions), and the Zobrist key
+now hashes the two new flags, so a position from the old book is never offered under the
+new rules.
+
 ## Design decisions
 
 - **Data, not code, for the rules.** A variant is a row in `src/rules/variants.js`:
@@ -175,21 +200,47 @@ a client had no number to plan around. The roadmap asked for a predictable ceili
 
 ## Historical accuracy
 
-Rule sets follow the documented sources: Linnaeus' 1732 tablut (throne off limits to all
-pieces, an empty castle acts as a captor, the king needs four attackers on the throne and
-three beside it, edge escape, repetition and no-move are draws), the Fetlar/Copenhagen
-rules (corner escape, throne and corners are castles, four attackers in the open field,
-the king is safe on the edge, sealing the host wins, no-move loses), and the Irish/Welsh
-reconstructions for brandub, ard-ri and tawlbwrdd. The alea evangelii follows the twelve
-rules next to the diagram in Cambridge, CCC MS 122 (c. 1140) as edited by D. Walker, with
-the army divided as H. J. R. Murray (1955) read the diagram. Sources: tafl.cyningstan.com,
-aagenielsen.dk, Wikipedia's tafl article. Brandub's, Ard Rí's and alea evangelii's starting
-positions are documented reconstructions — the manuscript draws every piece but four in one
-colour — and the variant file says so.
+Rule sets follow the documented sources, article by article, and each variant's `source`
+field names the text it implements.
+
+- **tablut** (Linnaeus, *Lachesis Lapponica*, 1732, 13 articles): one castle, the throne;
+  nobody lands on it and the king is barred from every castle, so a king who leaves it
+  never returns (rule 5); the empty throne is a captor; escape on any edge square, the
+  corners included; repetition and no-move are draws. How many attackers take the king in
+  the open field is read two ways in the sources, and the variant file says which reading
+  it plays.
+- **copenhagen** (the 13 Copenhagen articles, aagenielsen.dk, tafl.cyningstan.com): throne
+  and corners are the marked squares (rule 3), the corners are the exits (rule 9), the edge
+  is not hostile (rule 5), the shield wall takes a line of men at the edge (rule 7), the
+  king moves onto the marked squares and back onto his throne (rules 1 and 8), four
+  attackers take him and three next to the throne — the empty throne standing for the
+  fourth man — the king is safe on the edge, sealing his host wins (rule 12), a defender
+  with no legal move loses, and 100 / 140 / 160 moves give the game to the attackers
+  (rule 13).
+- **brandub** (the 12 rules drawn from the Irish poems *Ard Rí* and *Branán*): the centre
+  and the four corners are marked squares (rule 3) that capture for both sides (rule 9),
+  the king starts on the centre and escapes to a corner, two attackers take him; the army —
+  king + 4 against 8 — is the balanced reconstruction, not the poem's number.
+- **ard-ri**: the same poems, king + 8 against 16 on the 7×7 board, edge escape, no marked
+  squares; the setup is a reconstruction.
+- **alea evangelii** (Cambridge, CCC MS 122, c. 1140, the twelve rules beside the diagram as
+  edited by D. Walker, the army as H. J. R. Murray (1955) read the diagram): the citadel,
+  16 marked corner squares as the only exits, the marked squares capturing for both sides,
+  the edge a captor, 4 / 3 / 2 around the king; the starting colours are a documented
+  reconstruction.
+- **tawlbwrdd** (the 11×11 Welsh game): the throne is the castle, the edge is a captor,
+  edge escape; the setup is a reconstruction.
+
+Three rules of the texts are not implemented, because none of them states what happens:
+copenhagen rule 11 (the exit fort, named by the modern rule sets and never described),
+copenhagen rule 10 (the ban on repeating a position for ever), and the tablut *raichi*
+warning. Repetition is a draw everywhere, and the README lists the three. Sources:
+tafl.cyningstan.com, aagenielsen.dk, hnefatafl.org, Wikipedia's tafl article.
 
 The alea evangelii is played as the sources describe it, and it is imbalanced: self-play at
-120 ms a move sees the attackers take the king in most games (3 of the 4 seeds tested). The
-manuscript's own marginal note complains about the same thing.
+120 ms a move sees the attackers take the king in every game of the four seeds tested, in
+17 to 65 plies, and random and greedy self-play ends 96 % of the games that finish with the
+king in pieces. The manuscript's own marginal note complains about the same thing.
 
 ## Layout
 
@@ -207,9 +258,11 @@ tests/         board · game · notation · ai · display · headless · cli · 
 
 ## Status
 
-- Rules: complete for the six variants, 7×7 to 19×19, including the special ones (siege,
-  castle captors, king-only exits, the citadel nobody may land on, edge shield, edge
-  capture, per-square king capture counts).
+- Rules: complete for the six variants, 7×7 to 19×19, every flag checked back against the
+  collected rule texts, including the special ones (siege, castle captors, the Copenhagen
+  shield wall, king-only exits, the citadel nobody may land on, the king back on his throne,
+  edge shield and edge capture, king capture counts for the throne, the move limit that
+  gives the game to the attackers).
 - AI: negamax with a transposition table, killer moves, quiescence on captures, an opening
   book for the strong levels, four levels, seeded, and a node budget for reproducible
   matches; plays out every variant headlessly.
@@ -224,7 +277,9 @@ tests/         board · game · notation · ai · display · headless · cli · 
   client that takes it — with the token that plays it —, a Server-Sent Events stream per
   game, per-seat AI budgets (clock, nodes, depth) answered in the state, save-file
   round-trips, one message per error.
-- Tests: 150, all green, `npm test`, no dependencies.
+- Tests: 157, all green, `npm test`, no dependencies. Hours of self-play — 6 variants ×
+  7 sizes × 6 modes, random, greedy and every AI level — checked ply by ply against an
+  independent model of the geometry and of the captures: no violation.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.
 
 ## Roadmap

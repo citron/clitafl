@@ -166,6 +166,7 @@ test('the rules text spells out the army, the escape and the capture rule', () =
   assert.match(text, /Attackers move first/);
   assert.match(text, /any edge square/);
   assert.match(text, /throne/, 'the throne is explained');
+  assert.match(text, /nobody may land on them/, 'the throne is off limits to every man');
 });
 
 test('the alea evangelii rules text explains the marked squares and the citadel', () => {
@@ -173,8 +174,8 @@ test('the alea evangelii rules text explains the marked squares and the citadel'
   assert.match(text, /king \+ 24 defenders vs 48 attackers/);
   assert.match(text, /16 marked squares/, 'the 16 exits are named');
   assert.match(text, /plain board edge is not an exit/, 'the edge is not an exit');
-  assert.match(text, /Nobody may land on the citadel/, 'the central castle is off limits');
-  assert.match(text, /The king needs 2 attackers to be captured \(3 beside a castle, 4 on a castle\)/);
+  assert.match(text, /the ones the king escapes to are his alone, nobody else may land on any of them/, 'the citadel is off limits, the exits are the king\'s');
+  assert.match(text, /The king needs 2 attackers to be captured \(3 next to the throne, 4 on the throne\)/);
 });
 
 test('the moves list is readable notation', () => {

@@ -96,7 +96,7 @@ test('`rules alea` explains the marked squares of the gospel game', () => {
   assert.match(out, /Alea evangelii/);
   assert.match(out, /19x19/);
   assert.match(out, /16 marked squares/);
-  assert.match(out, /4 on a castle/, 'the king needs four counts on the citadel');
+  assert.match(out, /4 on the throne/, 'the king needs four counts on the citadel');
 });
 
 test('`rules copenhagen` explains the special rules of that variant', () => {  const { code, out } = run(['rules', 'copenhagen']);
@@ -111,8 +111,8 @@ test('`rules copenhagen` explains the special rules of that variant', () => {  c
 test('`rules brandub` keeps only the rules that variant has', () => {
   const { code, out } = run(['rules', 'brandub']);
   assert.equal(code, 0);
-  assert.match(out, /No special squares/, 'brandub has no castles');
-  assert.doesNotMatch(out, /beside a castle/, 'so the castle capture rule is not printed');
+  assert.match(out, /Castle squares: the throne and the four corners/, 'brandub marks the centre and the corners');
+  assert.match(out, /next to the throne/, 'and the garrison counts name the throne');
   assert.match(out, /king \+ 4 defenders vs 8 attackers/);
 });
 

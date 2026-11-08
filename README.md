@@ -25,7 +25,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 150 tests, node's built-in runner, no download needed
+npm test        # 157 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -43,11 +43,14 @@ npm test        # 150 tests, node's built-in runner, no download needed
 
 Every variant carries its own rule set in `src/rules/variants.js`: castle geometry
 (throne, corners, the four marked 2×2 blocks), who may land on a castle, whether an empty
-castle captures, how many attackers are needed around the king in the open field / beside
-a castle / on a castle, whether the edge shields the king and whether the edge itself
-captures, the siege win, the no-legal-move rule and the repetition rule. The attackers
-always open. `--size` (odd, 7–19) rebuilds a symmetric position for any variant, so you
-are not limited to the historical boards.
+castle captures, how many attackers are needed around the king on the throne / next to it
+/ in the open field, whether the edge shields the king and whether the edge itself
+captures, the shield wall of the Copenhagen rules, the siege win, the no-legal-move rule,
+the repetition rule and the move limit — with what the limit means, since the Copenhagen
+rules give the attackers the game when it is reached. The attackers always open. `--size`
+(odd, 7–19) rebuilds a symmetric position for any variant, so you are not limited to the
+historical boards; a variant that states its limit per size (Copenhagen: 100 / 140 / 160
+moves on 7 / 11 / 13) carries that rule over to the size you ask for.
 
 ## Commands
 
@@ -143,7 +146,7 @@ curl -sN localhost:8080/api/games/<id>/events
 | endpoint | what it does |
 | --- | --- |
 | `GET /api/health` | version, open games, variants, levels, engine |
-| `GET /api/variants` · `GET /api/variants/:id?size=11` | the armies, and the rules as text |
+| `GET /api/variants` · `GET /api/variants/:id?size=11` | the armies, every rule flag, and the rules as text |
 | `GET /api/levels` | the strength presets with their depth and budget |
 | `GET /api/games` · `POST /api/games` | list / open (`?include=closed` lists finished ones) |
 | `GET /api/lobby` · `GET /api/lobby/:id` | the games with a seat going, and one card of it |
@@ -169,6 +172,12 @@ Notes for a client:
   anonymous caller, gives its token up. `undo` and `seats` ask for the token of any seat in
   the game, because they act on the game a player owns; a `hint` is advice, not a move, so it
   stays open — the board is public information.
+- The rules travel with the game: `GET /api/variants` answers each rule set as data — the
+  escape target, the castle layout and who may land on it, the king-capture counts, the edge
+  and siege rules, the no-move, repetition and move-limit rules with what reaching the limit
+  means — and as `rules_text` prose, and every game state carries the same under `variant`
+  (`rules`, `max_plies`), so a client reads the rules it is playing under: a limit that ends
+  the game for the attackers (copenhagen rule 13) is in the state, not a secret of the server.
 - A reply carries `played` — the plies of the whole exchange: yours, then each AI seat.
 - A legal move is `{from, to, piece, san}`: `piece` is `king`, `defender` or `attacker`, and
   `san` is the string you post back as `{"move": "d5-d6"}`.
@@ -271,7 +280,7 @@ escape squares (including the marked 2×2 blocks), open lines to the escape, fre
 armies, space (per man, so the 19×19 board is not worth more than the 7×7 one) and the
 pressure the attackers build around the king.
 
-`src/ai/book.js` is a small opening book, `src/ai/book.json`: 411 prepared positions, 10
+`src/ai/book.js` is a small opening book, `src/ai/book.json`: 428 prepared positions, 10
 plies deep, made by seeded self-play (`node tools/make-book.js`, deterministic). A book
 move is only a suggestion — it is checked against the legal moves before it is played — and
 `book: false` (or `bookData`) turns it off.
@@ -342,22 +351,27 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-150 tests on `node:test` — no framework to install. They cover the historical armies and
+157 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
-king capture, the marked squares capturing for both sides), movement, capture counts (open
-field, beside and on a castle, edge), siege sealing, apply/undo symmetry, save round-trips,
-repetition and ply-limit draws, the search (mate in one, escapes, time budget, depth
-monotonicity, the depth and node ceilings answering the number they were given, capture
-prediction against the board for every legal move, quiescence
-following only captures, the Zobrist key over a 40-ply game, a node budget replaying
-itself, book moves being legal), the renderer (glyphs, colour off, legend counts, rules
-text, animation never touching the real board), the CLI itself (flags, exit codes,
-records, scripted games, a `--nodes` match replaying itself), the API (every endpoint, every error path, seats, clocks, per-seat
-budgets obeyed past the opening book, TTL,
-save round-trips, the watchers of a game hearing every change, games written to and read
-back from a state directory), and the HTTP layer over a real socket (static files,
-traversal attempts, CORS, body cap, the event stream frame by frame, a state directory
-behind a live server, and the `serve` command of the CLI started as a child process).
+king capture, the marked squares capturing for both sides), the rule details the sources
+spell out — the Copenhagen edge that does not capture (rule 5), the shield wall (rule 7),
+the king who goes back onto his throne (rules 1 and 8), the garrison that is raised for the
+throne alone, the Copenhagen move limit that gives the game to the attackers (rule 13), the
+limit that follows the size —, movement, capture counts (open field, next to and on the
+throne, edge), siege sealing, apply/undo symmetry, save round-trips, repetition and
+move-limit draws, the search (mate in one, escapes, time budget, depth monotonicity, the
+depth and node ceilings answering the number they were given, capture prediction against the
+board for every legal move, quiescence following only captures, the Zobrist key over a
+40-ply game, a node budget replaying itself, book moves being legal), the renderer (glyphs,
+colour off, legend counts, rules text, animation never touching the real board), the CLI
+itself (flags, exit codes, records, scripted games, a `--nodes` match replaying itself), the
+API (every endpoint, every error path, the catalogue answering the sourced rule flags — the
+shield wall, the king back on his throne, the edge that does not capture, the move limit and
+what it means —, seats, clocks, per-seat budgets obeyed past the opening book, TTL, save
+round-trips, the watchers of a game hearing every change, games written to and read back
+from a state directory), and the HTTP layer over a real socket (static files, traversal
+attempts, CORS, body cap, the event stream frame by frame, a state directory behind a live
+server, and the `serve` command of the CLI started as a child process).
 
 ## Rules sources
 
@@ -372,16 +386,72 @@ sources disagree (the tablut king capture count, the brandub setup) the variant 
 which reading it implements. Brandub's and Ard Rí's starting positions are
 reconstructions, not originals.
 
+### What each variant implements
+
+Every flag in `src/rules/variants.js` is a rule the sources state, and `npm test` pins the
+ones that are easy to get wrong. The rule numbers below are the articles of the collected
+texts at tafl.cyningstan.com (the 13 tablut and 13 Copenhagen articles, the 12 brandub and
+12 alea rules), aagenielsen.dk and hnefatafl.org.
+
+- **`tablut`** (Linnaeus, *Lachesis Lapponica*, 1732). One castle: the throne in the middle
+  of the 9×9 board. Nobody may land on it, and the king is barred from every castle, the
+  throne included (rule 5), so a king who leaves it never returns. The empty throne is a
+  captor: the text calls it the castle of the attackers, and the engine lets it serve both
+  sides, as the modern rule sets do. The king escapes to any edge square, the corners
+  included, and is taken by two attackers in the open field — the sources are read two ways
+  here, and the variant file names the reading it implements.
+- **`copenhagen`** (the 13 Copenhagen articles, aagenielsen.dk, tafl.cyningstan.com).
+  Throne and the four corners are the marked squares (rule 3); the corners alone are the
+  exits (rule 9). The edge is not hostile (rule 5), so a man pressed against it by one
+  enemy survives, and the shield wall of rule 7 is the capture at the edge instead: a line
+  of two or more enemy men along an edge line, walled in at one end, falls when the man
+  that just moved brackets the other end and presses every man of the line from the inside.
+  The king may move onto the marked squares (rule 1) and go back onto his throne (rule 8),
+  and no other man may. He needs four attackers (rule 4), and three next to the throne, the
+  empty throne standing for the fourth man. The attackers also win by sealing the king and
+  his host in (rule 12), and by the move limit: 100 / 140 / 160 moves on the 7 / 11 / 13
+  boards, after which the attackers win (rule 13). A defender with no legal move loses.
+- **`brandub`** (the 12 rules drawn from the Irish poems *Ard Rí* and *Branán*). The centre
+  and the four corners are marked squares (rule 3) that capture for both sides (rule 9), the
+  king starts on the centre, the corners are his exits. Two attackers take the king. The
+  army — king + 4 against 8 — is the balanced reconstruction, not the poem's number.
+- **`ard-ri`**: the same poems, the 7×7 board, king + 8 against 16, escape to the edge, no
+  marked squares. The setup is a reconstruction.
+- **`alea evangelii`** (Cambridge, CCC MS 122, c. 1140; the twelve rules beside the diagram,
+  as edited by D. Walker). The citadel in the middle, the four marked 2×2 blocks in the
+  corners — 16 squares — are the exits, the marked squares capture for both sides, the edge
+  is a captor, and the king needs four attackers, three next to the citadel, two in the open
+  field. The starting colours are a documented reconstruction.
+- **`tawlbwrdd`** (the 11×11 Welsh game). The throne is the castle, the edge is a captor,
+  the king escapes to the edge. The setup is a reconstruction.
+
+Three rules of the texts are deliberately **not** implemented, because no source gives a
+rule that can be played:
+
+- Copenhagen rule 11, the exit fort: the modern rule sets name a square where the king is
+  safe and the defenders win, and give no rule text for it at all, so the win is not
+  reachable. The siege win of rule 12 is implemented, and it is the attacker's version of
+  the same idea.
+- Copenhagen rule 10, "the same position must not be repeated forever": the text names the
+  ban and never says what happens, so a repeated position stays a draw, as everywhere else.
+- The tablut *raichi* warning — the attackers announce that the king can no longer be
+  taken, and the king's side then gives up — is a spoken notice between players in
+  Linnaeus' account, not a rule the engine can enforce, so it is not one.
+
 The alea evangelii is played as the sources describe it, and it is imbalanced: self-play at
-120 ms a move sees the attackers take the king in most games (3 of the 4 seeds tested, the
-fourth a king that reached a marked square). The manuscript's own marginal note complains
-about the same thing, and modern reconstructions are known to favour the attackers — the
-defenders start boxed in around a citadel they may not use.
+120 ms a move sees the attackers take the king in every game of the four seeds tested, in 17
+to 65 plies. The manuscript's own marginal note complains about the same thing, and modern
+reconstructions are known to favour the attackers — the defenders start boxed in around a
+citadel they may not use.
 
 ## Roadmap
 
-- A lobby: games that two named clients join by id, with a per-seat token.
-- Per-move limits for the search, so a `grandmaster` reply has a predictable ceiling.
+- Copenhagen rule 11 names an exit fort where the king is safe and the defenders win, and
+  the modern rule sets never give rule text for it: the win stays unimplemented until a
+  source describes the square.
+- Copenhagen rule 10 bans repeating the same position for ever and never says what follows,
+  and the tablut *raichi* warning ("the king can no longer be taken") is a spoken notice:
+  neither is a rule the engine enforces.
 - `ard-ri` has 7×7 armies, and 7×7 boards only carry 8 attackers in the symmetric
   generator: the setup for that variant is a documented reconstruction, not a source.
 

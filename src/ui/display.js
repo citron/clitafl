@@ -223,19 +223,29 @@ class Display {
       'The attackers win by capturing the king.',
       variant.castles === 'none'
         ? 'No special squares.'
-        : variant.castles === 'throne-cornerblocks'
-          ? 'Castle squares: the central citadel and the 16 marked corner squares. Nobody may land on the citadel, only the king may enter the marked squares, and an empty castle captures.'
-          : `Castle squares (${variant.castles}) block movement and act as a captor when empty; only the king may step onto a castle that is one of his escape squares.`,
+        : [
+          variant.castles === 'throne-cornerblocks'
+            ? 'Castle squares: the central citadel and the 16 marked squares of the corners'
+            : `Castle squares: ${variant.castles === 'throne' ? 'the throne' : 'the throne and the four corners'}`,
+          variant.escape === 'corner' || variant.escape === 'cornerblock'
+            ? 'the ones the king escapes to are his alone, nobody else may land on any of them'
+            : 'nobody may land on them',
+          'an empty castle captures for both sides',
+          variant.kingBackOnThrone ? 'the king may go back onto his throne' : '',
+        ].filter(Boolean).join('; ') + '.',
       variant.edgeShield
         ? 'The board edge acts as a captor.'
         : 'The board edge does not capture: a piece needs enemies on both sides.',
+      variant.shieldWall
+        ? 'Shield wall: a line of two or more enemy men along the edge, walled in at one end, is taken when the mover brackets the other end and presses every man from the inside.'
+        : '',
       variant.castles === 'none'
         ? `The king needs ${kc.elsewhere} attackers to be captured.`
-        : `The king needs ${kc.elsewhere} attackers to be captured (${kc.besideCastle} beside a castle, ${kc.onCastle} on a castle).`,
+        : `The king needs ${kc.elsewhere} attackers to be captured (${kc.besideCastle} next to the throne, ${kc.onCastle} on the throne).`,
       variant.kingSafeOnEdge ? 'The king cannot be captured on the edge.' : '',
       variant.winBySiege ? 'Attackers also win by sealing the king and all defenders in.' : '',
       `A player with no legal move: ${variant.noMove}.`,
-      `Repetition: ${variant.repetition}. Move limit: ${variant.maxPlies} plies.`,
+      `Repetition: ${variant.repetition}. Move limit: ${Math.ceil(variant.maxPlies / 2)} moves (${variant.maxPlies} plies)${variant.overrun === 'attackers-win' ? ', then the attackers win.' : ', then a draw.'}`,
     ].filter(Boolean).join('\n');
   }
 

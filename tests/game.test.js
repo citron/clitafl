@@ -170,6 +170,24 @@ test('a position that repeats three times is a draw', () => {
   assert.match(game.reason, /repeated/);
 });
 
+test('the copenhagen move limit is a win for the attackers', () => {
+  // Copenhagen rule 13: after 100 / 140 / 160 moves the attackers win.
+  const variant = { ...getVariant('copenhagen'), maxPlies: 4 };
+  const game = new Game(variant, Board.fromVariant(variant));
+  while (game.status === STATUS_PLAYING && game.ply < 4) game.play(game.legalMoves()[0]);
+  assert.equal(game.status, STATUS_ATTACKERS_WIN);
+  assert.equal(game.winner, SIDE_ATTACKER);
+  assert.match(game.reason, /2 moves/);
+});
+
+test('the move limit follows the size where the rules state one per size', () => {
+  // 10 x (size + 3) moves: 100 on 7x7, 140 on 11x11, 160 on 13x13.
+  assert.equal(getVariant('copenhagen', 7).maxPlies, 200);
+  assert.equal(getVariant('copenhagen', 11).maxPlies, 280);
+  assert.equal(getVariant('copenhagen', 13).maxPlies, 320);
+  assert.equal(getVariant('tablut', 11).maxPlies, getVariant('tablut').maxPlies, 'the other variants keep their own limit');
+});
+
 test('the ply limit is declared a draw', () => {
   const variant = { ...getVariant('tablut'), maxPlies: 2 };
   const game = new Game(variant, Board.fromVariant(variant));

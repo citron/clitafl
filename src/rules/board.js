@@ -170,10 +170,13 @@ class Board {
    * Captures are checked around the piece that just moved (the active side
    * captures). A soldier needs enemies on two opposite sides; the king needs
    * variant.kingCapture enemies, with castle squares and (optionally) the edge
-   * counting as captors.
+   * counting as captors. Where the variant has the Copenhagen shield wall
+   * (rule 7), the wall falls first and the plain flanking is read on the board
+   * that is left, so a man is never taken twice in one ply.
    */
   resolveCaptures(at, moverSide) {
-    const captured = [];
+    const captured = this.variant.shieldWall ? this.shieldWallCaptures(at, moverSide) : [];
+    const seen = new Set(captured.map((cap) => cap.i));
     const r0 = this.rowOf(at);
     const c0 = this.colOf(at);
     for (const [dr, dc] of DIRS) {
@@ -183,9 +186,62 @@ class Board {
       const victim = this.get(r, c);
       if (!isPiece(victim) || sideOf(victim) === moverSide) continue;
       if (this.isSurrounded(r, c, victim, moverSide)) {
-        captured.push({ i: this.idx(r, c), value: victim });
-        this.grid[this.idx(r, c)] = EMPTY;
+        const i = this.idx(r, c);
+        if (seen.has(i)) continue;
+        captured.push({ i, value: victim });
+        seen.add(i);
+        this.grid[i] = EMPTY;
         if (victim === KING) this.kingPos = -1;
+      }
+    }
+    return captured;
+  }
+
+  /**
+   * The Copenhagen shield wall (rule 7; the corner bracket follows the modern
+   * hnefatafl.org reading): a line of at least two enemy men standing on an
+   * edge line, walled in at one end, falls when the man that just moved
+   * brackets the other end and every man of the line is pressed on its inner
+   * side by a man of the mover's side. The king is not part of the wall: he
+   * falls to the plain rule (rule 4 / rule 8).
+   */
+  shieldWallCaptures(at, moverSide) {
+    const victimSide = moverSide === SIDE_ATTACKER ? SIDE_DEFENDER : SIDE_ATTACKER;
+    const captured = [];
+    const last = this.size - 1;
+    for (const [dr, dc] of DIRS) {
+      const horizontal = dc !== 0;
+      const run = [];
+      for (let step = 1; ; step += 1) {
+        const r = this.rowOf(at) + dr * step;
+        const c = this.colOf(at) + dc * step;
+        if (!this.inBounds(r, c)) break;
+        const v = this.get(r, c);
+        if (v === KING || sideOf(v) !== victimSide) break;
+        // the wall is a line along the edge: row 0/last, or column 0/last
+        if (horizontal ? !(r === 0 || r === last) : !(c === 0 || c === last)) break;
+        // pressed from the inside, the side facing away from the edge
+        const ir = r + (horizontal ? (r === 0 ? 1 : -1) : 0);
+        const ic = c + (horizontal ? 0 : (c === 0 ? 1 : -1));
+        if (!this.inBounds(ir, ic)) break;
+        const behind = this.get(ir, ic);
+        if (!isPiece(behind) || sideOf(behind) !== moverSide) break;
+        run.push({ i: this.idx(r, c), value: v });
+      }
+      if (run.length < 2) continue;
+      // the far end of the line must be walled in: the edge, a man of the
+      // mover, or an empty castle square that serves both sides
+      const far = run[run.length - 1];
+      const fr = this.rowOf(far.i) + dr;
+      const fc = this.colOf(far.i) + dc;
+      const walled = !this.inBounds(fr, fc)
+        || (isPiece(this.get(fr, fc)) && sideOf(this.get(fr, fc)) === moverSide)
+        || (this.get(fr, fc) === EMPTY && this.isCastle(fr, fc) && this.castleShieldFor(far.value));
+      if (!walled) continue;
+      for (const cap of run) {
+        if (captured.some((c2) => c2.i === cap.i)) continue;
+        captured.push(cap);
+        this.grid[cap.i] = EMPTY;
       }
     }
     return captured;
@@ -218,11 +274,17 @@ class Board {
       this.captorAt(r + ar, c + ac, victim) && this.captorAt(r + br, c + bc, victim));
   }
 
+  /**
+   * The sources give the king's garrison numbers for the throne — "four on the
+   * castle, three next to it" — so only that square raises the count. Every
+   * other castle square is a plain captor, and the king is taken next to it the
+   * same way as anywhere else.
+   */
   kingCaptureNeed(r, c) {
     const kc = this.variant.kingCapture;
-    if (this.isCastle(r, c)) return kc.onCastle;
+    if (this.isThrone(r, c)) return kc.onCastle;
     for (const [dr, dc] of DIRS) {
-      if (this.inBounds(r + dr, c + dc) && this.isCastle(r + dr, c + dc)) return kc.besideCastle;
+      if (this.inBounds(r + dr, c + dc) && this.isThrone(r + dr, c + dc)) return kc.besideCastle;
     }
     return kc.elsewhere;
   }

@@ -8,16 +8,31 @@ const { KING, DEFENDER, ATTACKER, SIDE_ATTACKER, SIDE_DEFENDER } = require('./pi
  *
  * size           board dimension (odd)
  * first          side that opens the game
- * escape         'edge' | 'corner'
- * castles        'none' | 'throne' | 'corners' | 'throne-corners'
+ * escape         'edge' | 'corner' | 'cornerblock' (the marked 2x2 alea corners)
+ * castles        'none' | 'throne' | 'corners' | 'throne-corners' | 'throne-cornerblocks'
  * castleShield   who may be captured against an empty castle: 'none'|'both'|'defender'|'attacker'
- * edgeShield     the board edge counts as a captor
- * kingCapture    enemies needed: onCastle / besideCastle / elsewhere
+ * edgeShield     the board edge counts as a captor. Copenhagen rule 5 is explicit
+ *                that the edge is NOT hostile, so the fetlar games set it false
+ * kingCapture    enemies needed on the throne (onCastle), next to the throne
+ *                (besideCastle) and elsewhere. The sources raise the count for
+ *                the throne only, the other castle squares are plain captors
  * kingSafeOnEdge king cannot be captured on the edge
- * winBySiege     attackers win by sealing the king's host in
+ * winBySiege     attackers win by sealing the king's host in (copenhagen rule 12)
+ * winByFort      the defenders lose once the king has left the fort and an enemy
+ *                stands beside him (copenhagen rule 11). Not implemented: the
+ *                modern exit fort has no rule text, see README
+ * shieldWall     the Copenhagen edge-row capture (Board.shieldWallCaptures)
+ * kingBackOnThrone the king may land on his throne again after leaving it
+ *                (copenhagen rule 1 and rule 8: "if the king returns to the
+ *                fort, the game continues")
  * noMove         result when the side to move has no move
- * repetition     result when a position repeats three times
- * maxPlies       hard limit declared a draw (0 = unlimited)
+ * repetition     result when a position repeats three times. Copenhagen rule 10
+ *                ("the same position must not be repeated forever") and the
+ *                tablut raichi warning are not implemented: repetition is a draw
+ * maxPlies       hard limit in plies (0 = unlimited), see overrun
+ * overrun        'draw' (default) or 'attackers-win' (copenhagen rule 13)
+ * moveLimitFor   size -> limit in MOVES, for the variants that state a limit per
+ *                size: copenhagen 10 x (size + 3) moves, so 100 / 140 / 160
  */
 const VARIANTS = {
   tablut: {
@@ -27,7 +42,7 @@ const VARIANTS = {
     size: 9,
     first: SIDE_ATTACKER,
     escape: 'edge',
-    castles: 'throne-corners',
+    castles: 'throne',
     castleShield: 'both',
     edgeShield: false,
     kingCapture: { onCastle: 4, besideCastle: 3, elsewhere: 2 },
@@ -36,8 +51,8 @@ const VARIANTS = {
     noMove: 'draw',
     repetition: 'draw',
     maxPlies: 200,
-    source: 'Linnaeus, Lachesis Lapponica; modern retranslation (tafl.cyningstan.com)',
-    blurb: 'Best documented tafl. The central castle is off limits to every piece, king included.',
+    source: 'Linnaeus, Lachesis Lapponica; 13 rules, tafl.cyningstan.com / hnefatafl.org',
+    blurb: 'Best documented tafl. The empty throne is the attackers\u0027 castle, the king is barred from every castle, and he escapes on the edge.',
   },
   copenhagen: {
     id: 'copenhagen',
@@ -48,15 +63,20 @@ const VARIANTS = {
     escape: 'corner',
     castles: 'throne-corners',
     castleShield: 'both',
-    edgeShield: true,
+    edgeShield: false,
     kingCapture: { onCastle: 4, besideCastle: 3, elsewhere: 4 },
     kingSafeOnEdge: true,
     winBySiege: true,
+    winByFort: false,
+    shieldWall: true,
+    kingBackOnThrone: true,
     noMove: 'loss',
     repetition: 'draw',
-    maxPlies: 300,
-    source: 'Fetlar / Copenhagen rules, aagenielsen.dk; tafl.cyningstan.com',
-    blurb: 'King escapes to a corner. Throne and corners are hostile castles; the king needs 4 attackers.',
+    maxPlies: 280,
+    overrun: 'attackers-win',
+    moveLimitFor: (size) => 10 * (size + 3),
+    source: 'Copenhagen rules, 13 articles, aagenielsen.dk / tafl.cyningstan.com; hnefatafl.org',
+    blurb: 'King escapes to a corner and may re-enter his fort. Throne and corners are castles, the edge is not: a line of men at the edge falls to the shield wall, and the king needs 4 attackers.',
   },
   brandub: {
     id: 'brandub',
@@ -65,8 +85,8 @@ const VARIANTS = {
     size: 7,
     first: SIDE_ATTACKER,
     escape: 'corner',
-    castles: 'none',
-    castleShield: 'none',
+    castles: 'throne-corners',
+    castleShield: 'both',
     edgeShield: true,
     kingCapture: { onCastle: 4, besideCastle: 3, elsewhere: 2 },
     kingSafeOnEdge: false,
@@ -74,8 +94,8 @@ const VARIANTS = {
     noMove: 'loss',
     repetition: 'draw',
     maxPlies: 120,
-    source: 'Irish poems "Ard Rí" / "Branán"; WTF balanced reconstruction',
-    blurb: 'Fast 7x7 game: 1 king + 4 defenders against 8 attackers, escape to a corner.',
+    source: '12 rules from the poems "Ard Rí" / "Branán", tafl.cyningstan.com / hnefatafl.org; army balanced',
+    blurb: 'Fast 7x7 game: 1 king + 4 defenders against 8 attackers, escape to a marked corner. Throne and corners are castles for both sides.',
   },
   'ard-ri': {
     id: 'ard-ri',
@@ -179,7 +199,13 @@ function getVariant(id, size = null) {
   if (size < MIN_SIZE || size > MAX_SIZE) {
     throw new Error(`Board size must be between ${MIN_SIZE} and ${MAX_SIZE}, got ${size}`);
   }
-  return { ...base, size, custom: true };
+  const res = { ...base, size, custom: true };
+  // A resized variant keeps its own limit rule: copenhagen plays 100 / 140 / 160
+  // moves on the 7 / 11 / 13 boards, so the limit has to follow the size.
+  if (typeof base.moveLimitFor === 'function') {
+    res.maxPlies = 2 * base.moveLimitFor(size);
+  }
+  return res;
 }
 
 function describeVariants() {
@@ -242,13 +268,20 @@ function isCorner(r, c, size) {
 }
 
 /**
- * Castle squares a piece may land on: a castle that is also an escape square is
- * reserved for the king, every other castle square is off limits to everyone.
+ * Castle squares a piece may land on. A castle that is also an escape square is
+ * reserved for the king (the alea corner blocks, the brandub and copenhagen
+ * corners); every other castle square is off limits to everyone, which is the
+ * tablut reading of "the king is barred from entering the castle, including the
+ * throne square" and the hnefatafl rule "the king may not enter the castle".
+ * A variant with kingBackOnThrone lets the king land on his throne again:
+ * copenhagen rule 1 ("the king may move onto these squares") and rule 8 ("if
+ * the king returns to the fort, the game continues").
  */
 function castleEnterableBy(variant, size, r, c) {
   if (!isCastle(variant, size, r, c)) return { king: true, defender: true, attacker: true };
   const escapeTarget = isEscapeSquare(variant, size, r, c);
-  return { king: escapeTarget, defender: false, attacker: false };
+  const kingOnThrone = Boolean(variant.kingBackOnThrone) && isThrone(variant, size, r, c);
+  return { king: escapeTarget || kingOnThrone, defender: false, attacker: false };
 }
 
 /**
