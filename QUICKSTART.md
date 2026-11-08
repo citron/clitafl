@@ -15,7 +15,7 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 157 tests.
+`npm start` does the same as the first line. `npm test` runs the 158 tests.
 
 ## Play in the browser
 
@@ -27,7 +27,9 @@ node src/index.js serve --state-dir ./games   # the open games survive a restart
 
 The page is a click-to-move board with the variant, size, seat and AI-strength pickers,
 the record, hint, undo, resign and save. Nothing to build: it is one HTML file, one CSS
-file and one JS file calling the API.
+file and two JS files calling the API. Squares are named as the API names them — the file
+letters from the left, the rank numbers from the top, so the top left cell is `a1` —, and the
+board you click is the board the server holds.
 
 ## Play from a script, or as an AI agent
 

@@ -136,17 +136,10 @@ async function loadRules(id) {
 
 function boardElement() { return elements.board; }
 
-function squareOfIndex(size, r, c) {
-  return `${'abcdefghijklmnopqrstuvwxyz'[c]}${size - r}`;
-}
-
-function indexOfSquare(size, square, files) {
-  const file = square[0].toLowerCase();
-  const rank = Number(square.slice(1));
-  const c = files.indexOf(file);
-  if (c < 0 || !Number.isInteger(rank) || rank < 1 || rank > size) return null;
-  return { r: size - rank, c };
-}
+/* The coordinates are the shared ones, the same file `tests/server.test.js`
+ * checks against `src/rules/notation.js`: the square you click is the square
+ * the API plays, and the piece that moves is the piece you clicked. */
+const { squareOfIndex, indexOfSquare } = window.clitaflSquares;
 
 /** `d5xe5` -> ['d5','e5'], so the last move can be highlighted. */
 function splitSan(san) {

@@ -25,7 +25,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 157 tests, node's built-in runner, no download needed
+npm test        # 158 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -341,6 +341,7 @@ src/index.js            command line, including serve
 tools/make-book.js      the book generator, seeded and deterministic
 web/index.html          the board page
 web/style.css           its theme
+web/squares.js          the coordinates: rank 1 is the top row, the way the engine names a square
 web/app.js              fetch calls, click-to-move, the agent command panel
 tests/                  node:test suites: rules, board, notation, AI, display, headless, CLI, net, server
 ```
@@ -351,7 +352,7 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-157 tests on `node:test` — no framework to install. They cover the historical armies and
+158 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
 king capture, the marked squares capturing for both sides), the rule details the sources
 spell out — the Copenhagen edge that does not capture (rule 5), the shield wall (rule 7),
@@ -371,7 +372,8 @@ what it means —, seats, clocks, per-seat budgets obeyed past the opening book,
 round-trips, the watchers of a game hearing every change, games written to and read back
 from a state directory), and the HTTP layer over a real socket (static files, traversal
 attempts, CORS, body cap, the event stream frame by frame, a state directory behind a live
-server, and the `serve` command of the CLI started as a child process).
+server, the page naming every square the way `formatSquare` does — the cell you click is the
+piece the API moves —, and the `serve` command of the CLI started as a child process).
 
 ## Rules sources
 

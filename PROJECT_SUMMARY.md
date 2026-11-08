@@ -8,8 +8,8 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-157 tests · 22 source files + 3 web files · ~5 900 lines of engine, AI, UI, CLI and server
-(~9 100 with the tests)
+158 tests · 22 source files + 4 web files · ~6 000 lines of engine, AI, UI, CLI and server
+(~9 500 with the tests)
 ```
 
 ## Why version 2 exists
@@ -49,7 +49,7 @@ it over a socket, without adding a dependency.
 | no way to play outside a terminal | `clitafl serve` opens a board page on one port: click-to-move, six variants, sizes 7–19, seat and strength pickers, hint, undo, resign, save |
 | no way for a program to play | a JSON API: `GET /api` describes every endpoint, 21 routes cover open/read/move/hint/undo/resign/seats/record/rules/save/watch/close |
 | an agent must guess the protocol | seats are `human`, `ai`, `agent`; `legal_moves` is the list for the side to move; a move reply carries the whole exchange, AI answer included; `400`/`404`/`405`/`409` are one readable sentence |
-| a web stack usually means a framework | the client is `web/index.html` + `style.css` + `app.js`, the server is `node:http` reading its own directory: nothing to install, nothing to build |
+| a web stack usually means a framework | the client is `web/index.html` + `style.css` + `squares.js` + `app.js`, the server is `node:http` reading its own directory: nothing to install, nothing to build |
 | the server must not be a way to fill the disk | games live in memory with a slot cap (`--max-games`) and a TTL (`--ttl` minutes), the body is capped at 1 MiB, the thinking clock at 30 s, and the file server cannot leave `web/` |
 
 ## Why version 2.2 exists
@@ -252,7 +252,7 @@ src/cli/       controller
 src/net/       errors · state · store · disk · api · server
 src/           headless.js · index.js
 tools/         make-book.js
-web/           index.html · style.css · app.js
+web/           index.html · style.css · squares.js · app.js
 tests/         board · game · notation · ai · display · headless · cli · net · server (+ helpers)
 ```
 
@@ -272,12 +272,14 @@ tests/         board · game · notation · ai · display · headless · cli · 
 - Web: a board page served by the same process — click-to-move, seat, level and search-ceiling
   pickers, record, hint, AI moves, undo, resign, save, an agent panel with the `curl` of the
   current game, and a stream it watches so a move played elsewhere lands on the board by itself.
+  The cells are named as the engine names them, and a test pins that: the piece you click is the
+  piece the server moves.
 - API: 21 JSON endpoints, self-describing, CORS open, a session store with slots, TTL,
   watchers and an optional state directory, a lobby where an open seat goes to the first
   client that takes it — with the token that plays it —, a Server-Sent Events stream per
   game, per-seat AI budgets (clock, nodes, depth) answered in the state, save-file
   round-trips, one message per error.
-- Tests: 157, all green, `npm test`, no dependencies. Hours of self-play — 6 variants ×
+- Tests: 158, all green, `npm test`, no dependencies. Hours of self-play — 6 variants ×
   7 sizes × 6 modes, random, greedy and every AI level — checked ply by ply against an
   independent model of the geometry and of the captures: no violation.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.

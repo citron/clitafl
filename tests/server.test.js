@@ -8,6 +8,8 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 
 const { serve, staticFile, MAX_BODY_BYTES } = require('../src/net/server');
+const { formatSquare } = require('../src/rules/notation');
+const { squareOfIndex, indexOfSquare } = require('../web/squares');
 
 const ROOT = path.join(__dirname, '..');
 const ENTRY = path.join(ROOT, 'src', 'index.js');
@@ -105,6 +107,22 @@ function sseReader(response) {
   };
 }
 
+test('the page names the squares the way the engine does, so the piece you click is the piece that moves', () => {
+  for (const size of [7, 9, 11, 15, 19]) {
+    const files = 'abcdefghijklmnopqrstuvwxyz'.slice(0, size).split('');
+    for (let i = 0; i < size * size; i += 1) {
+      const r = Math.floor(i / size);
+      const c = i % size;
+      const name = formatSquare(size, i);
+      assert.equal(squareOfIndex(size, r, c), name, `the cell ${r},${c} of a ${size}x${size} board is ${name}`);
+      assert.deepEqual(indexOfSquare(size, name, files), { r, c }, `${name} is the cell ${r},${c}`);
+    }
+    assert.equal(indexOfSquare(size, `${files[files.length - 1]}${size + 1}`, files), null, 'a rank off the board is nothing');
+    assert.equal(indexOfSquare(size, 'z1', files), null, 'a file off the board is nothing');
+  }
+  assert.equal(squareOfIndex(9, 0, 0), 'a1', 'rank 1 is the top row, the way the terminal prints the board');
+});
+
 test('the web client is served, and a HEAD request carries the length without the body', async () => {
   await withApp({}, async (app) => {
     const page = await call(app, 'GET', '/');
@@ -116,6 +134,12 @@ test('the web client is served, and a HEAD request carries the length without th
     const script = await call(app, 'GET', '/app.js');
     assert.equal(script.status, 200);
     assert.match(script.type, /text\/javascript/);
+
+    const squares = await call(app, 'GET', '/squares.js');
+    assert.equal(squares.status, 200, 'the coordinates are a file of their own');
+    assert.match(squares.type, /text\/javascript/);
+    assert.match(page.text, /<script src="squares\.js"><\/script>\s*<script src="app\.js">/,
+      'and it loads before the page code that uses it');
 
     const css = await call(app, 'GET', '/style.css');
     assert.equal(css.status, 200);
