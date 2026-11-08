@@ -148,7 +148,10 @@
   the API sent, rank 1 being the top row — the way `src/rules/notation.js` reads a move and the
   terminal prints the board. It loads before `app.js`, and `tests/server.test.js` pins it to
   `formatSquare` square by square on every size, so the piece you click is the piece the server
-  moves. A plain script tag makes it a global, `require` gives it to the tests.
+  moves. `require` gives it to the tests, a script tag gives the page the one global
+  `clitaflSquares`, and the file is inside a function: the scripts of a page share one scope, and
+  a top level name of the same spelling in two of them is a page that never loads. `app.js` takes
+  it as one object, and a test compiles the two files together to keep it that way.
 - **app.js** — one `fetch` per action: it renders exactly what the API sends, clicks
   squares into moves from `legal_moves`, and never invents a rule of its own. It also
   opens an `EventSource` on the game it shows, so a move played from a terminal, a script
@@ -215,9 +218,10 @@
   with one token each and neither playing the other's seat, a seat handed to the AI or back
   to the caller giving its token up and a new owner getting a new one, and the seat, its
   name and its token coming back off the state directory.
-- **server.test.js** — 15 tests: over a real socket — the page, CSS and JS and the square
+- **server.test.js** — 16 tests: over a real socket — the page, CSS and JS and the square
   names of the page answering `formatSquare` on sizes 7 to 19 (the cell you click is the piece
-  the API moves, and the script that names them loads before the code that uses it),
+  the API moves, the script that names them loading before the code that uses it, and the two
+  scripts of the page compiling in one scope without declaring a name twice),
   HEAD, traversal
   probes, JSON over HTTP, CORS preflight (including the token header), broken JSON, missing
   files, `405`, the body cap, the game cap, `serve` on a free port, a state directory behind

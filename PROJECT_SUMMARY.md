@@ -8,7 +8,7 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-158 tests · 22 source files + 4 web files · ~6 000 lines of engine, AI, UI, CLI and server
+159 tests · 22 source files + 4 web files · ~6 000 lines of engine, AI, UI, CLI and server
 (~9 500 with the tests)
 ```
 
@@ -273,13 +273,14 @@ tests/         board · game · notation · ai · display · headless · cli · 
   pickers, record, hint, AI moves, undo, resign, save, an agent panel with the `curl` of the
   current game, and a stream it watches so a move played elsewhere lands on the board by itself.
   The cells are named as the engine names them, and a test pins that: the piece you click is the
-  piece the server moves.
+  piece the server moves — and the scripts of the page compile in one scope, declaring no name
+  twice.
 - API: 21 JSON endpoints, self-describing, CORS open, a session store with slots, TTL,
   watchers and an optional state directory, a lobby where an open seat goes to the first
   client that takes it — with the token that plays it —, a Server-Sent Events stream per
   game, per-seat AI budgets (clock, nodes, depth) answered in the state, save-file
   round-trips, one message per error.
-- Tests: 158, all green, `npm test`, no dependencies. Hours of self-play — 6 variants ×
+- Tests: 159, all green, `npm test`, no dependencies. Hours of self-play — 6 variants ×
   7 sizes × 6 modes, random, greedy and every AI level — checked ply by ply against an
   independent model of the geometry and of the captures: no violation.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.

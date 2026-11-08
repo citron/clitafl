@@ -138,8 +138,11 @@ function boardElement() { return elements.board; }
 
 /* The coordinates are the shared ones, the same file `tests/server.test.js`
  * checks against `src/rules/notation.js`: the square you click is the square
- * the API plays, and the piece that moves is the piece you clicked. */
-const { squareOfIndex, indexOfSquare } = window.clitaflSquares;
+ * the API plays, and the piece that moves is the piece you clicked. It is read
+ * as one object, never destructured into two top level names: `squares.js` and
+ * this file share the global scope of the page, and a name declared in both is
+ * a page that does not load. */
+const squares = window.clitaflSquares;
 
 /** `d5xe5` -> ['d5','e5'], so the last move can be highlighted. */
 function splitSan(san) {
@@ -167,7 +170,7 @@ function renderBoard() {
 
   for (let r = 0; r < size; r += 1) {
     for (let c = 0; c < size; c += 1) {
-      const square = squareOfIndex(size, r, c);
+      const square = squares.squareOfIndex(size, r, c);
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'sq';
@@ -210,7 +213,7 @@ function renderBoard() {
 
 function isCaptureSquare(game, square) {
   const size = game.board.size;
-  const at = indexOfSquare(size, square, game.board.files);
+  const at = squares.indexOfSquare(size, square, game.board.files);
   return at && rowsOf(game)[at.r][at.c] !== '.';
 }
 
@@ -432,7 +435,7 @@ async function onSquareClick(square) {
     return;
   }
   const size = game.board.size;
-  const at = indexOfSquare(size, square, game.board.files);
+  const at = squares.indexOfSquare(size, square, game.board.files);
   const glyph = rowsOf(game)[at.r][at.c];
 
   const target = state.movesOfSelected.find((m) => m.to === square);

@@ -123,6 +123,19 @@ test('the page names the squares the way the engine does, so the piece you click
   assert.equal(squareOfIndex(9, 0, 0), 'a1', 'rank 1 is the top row, the way the terminal prints the board');
 });
 
+test('the scripts of the page share the scope of the page, and share no name', () => {
+  const squaresSrc = fs.readFileSync(path.join(WEB, 'squares.js'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8');
+  const inOneScope = (source) => new Function(source);
+
+  assert.doesNotThrow(() => inOneScope(`${squaresSrc}\n${appSrc}`),
+    'a browser reads every script tag of a page in one scope, where a name declared twice is a page that never loads');
+  assert.doesNotThrow(() => inOneScope(`${squaresSrc}\n${squaresSrc}\n${appSrc}`),
+    'and a script asked for twice is the same scope twice');
+  assert.match(appSrc, /const squares = window\.clitaflSquares;/,
+    'so the page takes the coordinates as one object, never as two names of its own');
+});
+
 test('the web client is served, and a HEAD request carries the length without the body', async () => {
   await withApp({}, async (app) => {
     const page = await call(app, 'GET', '/');

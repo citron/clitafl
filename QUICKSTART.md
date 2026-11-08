@@ -15,7 +15,7 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 158 tests.
+`npm start` does the same as the first line. `npm test` runs the 159 tests.
 
 ## Play in the browser
 
