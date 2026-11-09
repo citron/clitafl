@@ -48,9 +48,9 @@ const elements = {};
 function cacheElements() {
   [
     'variant', 'size', 'seat-a', 'seat-d', 'level-a', 'level-d', 'time', 'nodes',
-    'board', 'turn', 'counts', 'status', 'variant-name', 'message', 'history',
-    'btn-new', 'btn-swap', 'btn-hint', 'btn-ai', 'btn-undo', 'btn-resign', 'btn-export',
-    'btn-refresh', 'btn-games', 'btn-copy', 'games', 'rules-text', 'rules-title',
+    'board', 'stage', 'turn', 'counts', 'status', 'variant-name', 'fit-note', 'message', 'history',
+    'last-moves', 'btn-new', 'btn-swap', 'btn-hint', 'btn-ai', 'btn-undo', 'btn-resign', 'btn-export',
+    'btn-refresh', 'btn-games', 'btn-copy', 'btn-full', 'games', 'rules-text', 'rules-title',
     'meta-id', 'meta-ply', 'meta-moves', 'meta-ai', 'meta-seats', 'meta-budget', 'levels-note', 'version',
     'cmd-create', 'cmd-state', 'cmd-move', 'cmd-lobby', 'cmd-watch', 'cmd-index',
   ].forEach((id) => { elements[id] = $(id); });
@@ -144,6 +144,77 @@ function boardElement() { return elements.board; }
  * a page that does not load. */
 const squares = window.clitaflSquares;
 
+/* ---------- the board fills what the window leaves it ---------- */
+
+/* The board is square, so the shorter side of the space between the two
+ * strips decides the cell. `fitSquare`, `boardBox` and `boardScale` live in
+ * `squares.js`, where `tests/server.test.js` pins them against each other: a
+ * 7x7 on a phone and a 19x19 on a big screen both get the largest board that
+ * fits, and the page never overflows the window. Resizing the window resizes
+ * the game; a window too small for the smallest readable board gets the whole
+ * board drawn smaller, never a board cut off. */
+function fitBoard(size) {
+  const stage = elements.stage;
+  if (!stage) return;
+  const n = size || (state.game ? state.game.board.size : 9);
+  const style = window.getComputedStyle(stage);
+  const inside = (axis, from, to) => stage[`client${axis}`]
+    - (parseFloat(style[`padding${from}`]) || 0)
+    - (parseFloat(style[`padding${to}`]) || 0);
+  const width = inside('Width', 'Left', 'Right');
+  const height = inside('Height', 'Top', 'Bottom');
+  const cell = squares.fitSquare(n, width, height);
+  const box = squares.boardBox(n, cell);
+  const scale = squares.boardScale(n, width, height);
+  const board = boardElement();
+  board.style.setProperty('--n', n);
+  board.style.setProperty('--sq', `${cell}px`);
+  board.style.setProperty('--gap', `${box.gap}px`);
+  board.style.setProperty('--pad', `${box.pad}px`);
+  board.style.setProperty('--scale', scale.toFixed(3));
+  if (elements['fit-note']) {
+    elements['fit-note'].textContent = scale < 1 ? `${n}×${n} at ${Math.round(scale * 100)}% of a readable board` : '';
+  }
+}
+
+/* ---------- the panels: one sheet over the board, bounded by the window ---------- */
+
+let sheet = null;
+
+function openSheet(id) {
+  const next = $(id);
+  if (!next) return;
+  if (sheet && sheet !== next) sheet.hidden = true;
+  next.hidden = false;
+  sheet = next;
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.setAttribute('aria-expanded', tab.dataset.sheet === id ? 'true' : 'false');
+  });
+  if (id === 'sheet-record') elements.history.scrollTop = elements.history.scrollHeight;
+  const close = next.querySelector('.sheet-close');
+  if (close) close.focus({ preventScroll: true });
+}
+
+function closeSheet() {
+  if (!sheet) return;
+  sheet.hidden = true;
+  sheet = null;
+  document.querySelectorAll('.tab').forEach((tab) => tab.setAttribute('aria-expanded', 'false'));
+  fitBoard();
+}
+
+function toggleSheet(id) {
+  if (sheet && sheet.id === id) closeSheet();
+  else openSheet(id);
+}
+
+/** The browser's own full screen, so the board is the whole window. */
+function fullBoard() {
+  const node = document.documentElement;
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else if (node.requestFullscreen) node.requestFullscreen().catch(() => {});
+}
+
 /** `d5xe5` -> ['d5','e5'], so the last move can be highlighted. */
 function splitSan(san) {
   const parts = san.split(/[x-]/);
@@ -164,9 +235,8 @@ function renderBoard() {
   const playable = !game.is_over && state.selected;
 
   const board = boardElement();
-  board.style.setProperty('--n', size);
-  board.style.setProperty('--sq', `${Math.max(26, Math.min(64, Math.round(560 / size)))}px`);
   board.textContent = '';
+  fitBoard(size);
 
   for (let r = 0; r < size; r += 1) {
     for (let c = 0; c < size; c += 1) {
@@ -297,6 +367,7 @@ function renderStatus() {
   const ai = game.last_ai;
   elements['meta-ai'].textContent = ai
     ? `${ai.san || '—'} · ${ai.level} depth ${ai.depth}, ${ai.nodes} nodes`
+      + (ai.aborted ? ' · out of room' : '')
     : '—';
 
   elements['btn-ai'].disabled = game.is_over || !(game.seats.attacker === 'ai' || game.seats.defender === 'ai');
@@ -305,16 +376,25 @@ function renderStatus() {
   elements['btn-undo'].disabled = game.ply === 0;
 }
 
+/** One ply of the record, in the shape both the strip and the sheet use. */
+function historyRow(entry) {
+  return `<li class="${entry.side}${entry.captured.length ? ' takes' : ''}">`
+    + `<strong>${String(entry.ply).padStart(2, '0')} ${entry.side[0].toUpperCase()}</strong> ${entry.san}`
+    + (entry.captured.length ? ` ×${entry.captured.length}` : '')
+    + '</li>';
+}
+
 function renderHistory() {
   const game = state.game;
   if (!game) return;
-  elements.history.innerHTML = game.history
-    .map((entry) => `<li class="${entry.side}${entry.captured.length ? ' takes' : ''}">`
-      + `<strong>${String(entry.ply).padStart(2, '0')} ${entry.side[0].toUpperCase()}</strong> ${entry.san}`
-      + (entry.captured.length ? ` ×${entry.captured.length}` : '')
-      + '</li>')
-    .join('');
+  elements.history.innerHTML = game.history.map(historyRow).join('');
   elements.history.scrollTop = elements.history.scrollHeight;
+
+  /* The strip under the board carries the tail of the record: the list is
+   * written in order and scrolled to its end, so narrowing the window drops
+   * the oldest moves that no longer fit and keeps the ones that matter. */
+  elements['last-moves'].innerHTML = game.history.slice(-60).map(historyRow).join('');
+  elements['last-moves'].scrollLeft = elements['last-moves'].scrollWidth;
 }
 
 function renderCommands() {
@@ -565,16 +645,51 @@ function wire() {
     act('…', () => onSquareClick(cell.dataset.square));
   });
 
+  /* One key, one panel. The board is never pushed off the screen to make room
+   * for a panel: the panel comes over it, and closes on Esc. */
+  document.querySelectorAll('[data-sheet]').forEach((button) => {
+    button.addEventListener('click', () => toggleSheet(button.dataset.sheet));
+  });
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-close]')) closeSheet();
+    else if (event.target.classList.contains('sheet')) closeSheet();
+  });
+
+  const sheetKeys = {
+    1: 'sheet-setup', 2: 'sheet-game', 3: 'sheet-record', 4: 'sheet-agent', 5: 'sheet-rules', 6: 'sheet-games',
+  };
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && state.selected) {
-      state.selected = null;
-      state.movesOfSelected = [];
-      renderBoard();
-      setMessage('');
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === 'Escape') {
+      if (sheet) { closeSheet(); return; }
+      if (state.selected) {
+        state.selected = null;
+        state.movesOfSelected = [];
+        renderBoard();
+        setMessage('');
+      }
+      return;
+    }
+    if (/^(input|textarea|select)$/i.test(event.target.tagName)) return;
+    if (sheetKeys[event.key]) {
+      event.preventDefault();
+      toggleSheet(sheetKeys[event.key]);
+      return;
+    }
+    if (event.key === 'f' || event.key === 'F') {
+      event.preventDefault();
+      fullBoard();
     }
   });
 
+  /* The window is the board's size: a resize, a phone rotating, a sheet
+   * closing, entering full screen — every one of them refits the board. */
+  window.addEventListener('resize', fitBoard);
+  document.addEventListener('fullscreenchange', fitBoard);
+  if (window.ResizeObserver) new ResizeObserver(() => fitBoard()).observe(elements.stage);
+
   elements.variant.addEventListener('change', onVariantChange);
+  elements['btn-full'].addEventListener('click', fullBoard);
   elements['btn-new'].addEventListener('click', () => act('opening a game…', newGame));
   elements['btn-swap'].addEventListener('click', swapSeats);
   elements['btn-hint'].addEventListener('click', () => act('the AI is thinking…', hint));

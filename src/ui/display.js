@@ -32,6 +32,23 @@ const COLORS = {
 };
 
 /** Terminal renderer. It only reads the game: rendering never mutates state. */
+/**
+ * The note of a window too small for the board: the two numbers, and the
+ * advice when the window has room for it. The counts are what a player can
+ * act on, so they are the tier that is kept to the last: `25 rows needed
+ * (this: 12)` becomes `25 → 12 rows` in a window of 12 columns.
+ */
+function shortNote(want, have, unit, advice, columns) {
+  const tiers = [
+    `${want} ${unit} needed (this: ${have})${advice ? ` - ${advice}` : ''}`,
+    `${want} ${unit} needed (this: ${have}) - enlarge the terminal`,
+    `${want} ${unit} needed (this: ${have})`,
+    `${want} → ${have} ${unit}`,
+  ];
+  const fits = tiers.find((text) => Ansi.width(text) <= columns);
+  return fits === undefined ? Ansi.fit(tiers[tiers.length - 1], columns) : fits;
+}
+
 class Display {
   constructor(options = {}) {
     this.ansi = options.ansi || new Ansi({ color: options.color });
@@ -59,6 +76,10 @@ class Display {
     const { ansi } = this;
     const size = board.size;
     const highlight = opts.lastMove || null;
+    // A narrow window cannot pay two columns per square: at pitch 1 the board
+    // is one character per square, which is what keeps a 19x19 whole in 22
+    // columns. The tests of the plain renderer ask for pitch 2, the default.
+    const pitch = opts.pitch === 1 ? 1 : 2;
     // One gutter for both frames: the rank label is padded to it, the header pads
     // with the same number of spaces, so every file letter sits on its column.
     const gutter = String(size).length + 1;
@@ -66,7 +87,8 @@ class Display {
     const frame = ansi.style([' '.repeat(gutter), ...letters].join(' '), 'gray');
     const lines = [frame];
     for (let r = 0; r < size; r += 1) {
-      const cells = [ansi.style(String(r + 1).padStart(gutter), 'gray')];
+      const label = ansi.style(String(r + 1).padStart(gutter), 'gray');
+      const cells = [];
       for (let c = 0; c < size; c += 1) {
         const glyph = this.glyphFor(board, r, c);
         const index = board.idx(r, c);
@@ -74,10 +96,26 @@ class Display {
         const text = ansi.style(glyph, ...this.colorFor(board, r, c));
         cells.push(isPath ? ansi.style(glyph, 'bold', 'inverse') : text);
       }
-      lines.push(cells.join(' '));
+      if (pitch === 1) lines.push(`${label} ${cells.join('')}`);
+      else lines.push([label, ...cells].join(' '));
     }
     lines.push(frame);
     return lines;
+  }
+
+  /**
+   * The columns a board of `size` takes at each pitch: the rank gutter, the
+   * space after it, and the cells — one column per square at pitch 1, two at
+   * pitch 2. This is what decides whether a window can pay for the wide board.
+   */
+  static boardWidth(size, pitch = 2) {
+    const gutter = String(size).length + 1;
+    return gutter + 1 + (pitch === 1 ? size : 2 * size - 1);
+  }
+
+  /** The rows a whole board of `size` takes, header and footer included. */
+  static boardRows(size) {
+    return size + 2;
   }
 
   boardString(board, opts = {}) {
@@ -135,6 +173,137 @@ class Display {
     }
     return lines.join('\n');
   }
+
+  /** One line of state, the only line the board never displaces. */
+  statusLine(game, opts = {}) {
+    const { ansi } = this;
+    const v = game.variant;
+    const turn = game.turn === SIDE_DEFENDER
+      ? ansi.style('defenders', 'brightBlue')
+      : ansi.style('attackers', 'brightRed');
+    /* A window too short for the board is the one thing the player has to
+     * read, so the note leads the line and the rest of it may be cut. */
+    const parts = [];
+    if (opts.note) parts.push(ansi.style(opts.note, 'yellow', 'bold'));
+    parts.push(
+      ansi.style(v.name, 'bold'),
+      ansi.style(`${v.size}x${v.size}`, 'gray'),
+      game.isGameOver() ? ansi.style(this.outcomeLine(game), 'bold') : ansi.style('turn ', 'gray') + turn,
+      ansi.style(`ply ${game.ply}`, 'gray'),
+      ansi.style(`${game.legalMoves(game.turn).length} legal moves`, 'gray'),
+    );
+    return parts.join('   ');
+  }
+
+  /**
+   * The screen as it fits one window of `rows` x `columns`, for a terminal
+   * that is never asked to scroll: the board whole, one status line, the last
+   * move, the legend, and as much of the journal as the window leaves room
+   * for. What does not fit goes oldest first — the journal, then the legend,
+   * then the last move — and a window too short for a whole board says so on
+   * the status line instead of cutting the board.
+   *
+   * `log` is the journal as lines of text, oldest first: each is wrapped to
+   * the window and the newest rows are kept. `reserve` is what the caller
+   * draws under the frame, which is the prompt of the input line: one row.
+   *
+   * Three windows, three frames. One with room for the board, its state line
+   * and the prompt (`need` rows) gets a frame of exactly the window: no
+   * scroll, no jump, no row of the last frame left behind. One with room for
+   * the board alone (`minRows`) gets the board and the state line, and
+   * nothing else. One shorter than the board whole gets the board whole and a
+   * state line that says what the terminal is short of: the board is never
+   * cut, and the prompt is the one row that scrolls.
+   */
+  fit(game, opts = {}) {
+    const rows = Math.max(4, opts.rows || 24);
+    const columns = Math.max(12, opts.columns || 80);
+    const reserve = opts.reserve === undefined ? 1 : Math.max(0, opts.reserve);
+    const board = opts.board || game.board;
+    const size = board.size;
+    const pitch = Display.boardWidth(size) <= columns ? 2 : 1;
+    const drawn = this.boardLines(board, { pitch, lastMove: opts.lastMove || game.lastMove });
+    const boardCols = Display.boardWidth(size, pitch);
+    const need = 1 + drawn.length + 1 + reserve;
+    const shortRows = rows < need;
+    // One column per square is as narrow as the board is ever drawn: below
+    // that a rank cannot be shown, and the window is told so.
+    const shortCols = boardCols > columns;
+
+    const lines = [Ansi.fit(this.statusLine(game, {}), columns)];
+    /* The blank between the state and the board is a luxury: a window that is
+     * no wider than the board and its state keeps the board and the note. */
+    const budget = rows - reserve;
+    if (!shortRows && budget >= 1 + drawn.length + 2) lines.push('');
+    lines.push(...drawn.map((line) => Ansi.fit(line, columns)));
+    let noteRows = 0;
+    if (shortRows || shortCols) {
+      /* The top rows of a window that is too short scroll away, so the note
+       * that counts what is missing is written last, where a scrolling window
+       * leaves it. A narrow window cuts the tail of a line, so each count
+       * leads its own row - a window short and narrow says both - and the
+       * advice goes before the numbers do: a cut number is no use to anyone. */
+      const advice = `a ${size}x${size} board whole, its state and the prompt. Enlarge the terminal, or play a smaller board`;
+      if (shortRows) {
+        lines.push(this.ansi.style(shortNote(need, rows, 'rows', advice, columns), 'yellow', 'bold'));
+        noteRows += 1;
+      }
+      if (shortCols) {
+        const colsAdvice = shortRows ? '' : advice;
+        lines.push(this.ansi.style(shortNote(boardCols, columns, 'columns', colsAdvice, columns), 'yellow', 'bold'));
+        noteRows += 1;
+      }
+    }
+
+    let journalRows = 0;
+    let dropped = 0;
+    if (!shortRows && budget - lines.length >= 1) {
+      /* What the window leaves, in the order it is given up: the last move,
+       * then the legend. The journal takes what is left, newest rows first. */
+      const pieces = [];
+      if (game.isGameOver()) pieces.push(this.outcomeLine(game));
+      else if (game.lastMove) pieces.push(`last move: ${formatMove(board.size, game.lastMove)}`);
+      pieces.push(this.legend(game));
+      for (const piece of pieces) {
+        if (rows - reserve - lines.length < 1) break;
+        lines.push(Ansi.fit(piece, columns));
+      }
+
+      const journal = [];
+      for (const entry of opts.log || []) journal.push(...Ansi.wrap(entry, columns));
+      const room = Math.max(0, rows - reserve - lines.length);
+      journalRows = Math.min(journal.length, room);
+      dropped = journal.length - journalRows;
+      lines.push(...journal.slice(journal.length - journalRows));
+    }
+
+    const used = lines.length;
+    /* A window that fits the board is filled to the last row, so the prompt
+     * never moves and no row of the last frame survives. A window that is too
+     * short is not padded: the board is shown whole, the note counts what is
+     * missing, and the prompt is the one row that scrolls. */
+    if (!shortRows) {
+      while (lines.length < Math.max(0, rows - reserve)) lines.push('');
+    }
+    return {
+      lines,
+      rows,
+      columns,
+      reserve,
+      pitch,
+      need,
+      minRows: 1 + drawn.length,
+      boardRows: drawn.length,
+      boardCols,
+      journalRows,
+      dropped,
+      noteRows,
+      padded: lines.length - used,
+      shortRows,
+      shortCols,
+    };
+  }
+
 
   outcomeLine(game) {
     const { ansi } = this;

@@ -43,15 +43,37 @@
 - **player.js** — `AIPlayer` and the four strength presets (`easy`, `medium`, `hard`,
   `grandmaster`), each with a depth ceiling, a time budget, how far from the best move its
   play is allowed to wander, its own transposition table, `maxNodes`, and the book hook
-  (`book: false` / `bookData` to say otherwise).
+  (`book: false` / `bookData` to say otherwise). `lastInfo` is what the last move cost and
+  how far it got — level, depth, nodes, score, time, the table's size, `book` or `search`,
+  the square it chose — and `aborted`: whether the clock or the node ceiling cut the search
+  short, which is what tells an evaluation of the position from the best move a search had
+  when it ran out of room. The store carries it into `last_ai` and the API into the
+  `hint` payload.
 
 ## `src/ui/`
 
 - **ansi.js** — terminal control built from escape sequences: colour (off for `NO_COLOR`,
-  `--no-color`, `TERM=dumb`, non-TTY), cursor, alt screen, clear, `sleep`.
+  `--no-color`, `TERM=dumb`, non-TTY), cursor, alt screen, clear, `sleep`. The screen escapes
+  are gated on the output being a terminal (`control`, which colour off does not turn off), so
+  a pipe never receives a cursor move. It is also how the program reads its window: `geometry`
+  and `onResize` (a pipe falls back to the size a terminal has by default), and the three
+  measures a frame is built from: `width` of a styled line, `fit` cutting a line to the window
+  with an ellipsis and the styles closed before it, `wrap` breaking one on the spaces without
+  leaving a row that starts on a space; `cut`/`cutStart`/`fitAll`, `strip`, and `keyName`,
+  which names what a terminal sends (both spellings of an arrow, `home`, `end`, the two page
+  keys, `escape`, ctrl-c) so the pages can read a key.
 - **display.js** — board rendering with a coordinate frame, unicode or `--ascii` glyphs,
   legend, status lines, banner, rules text, help text, the per-square move animation
-  (drawn on a copy of the board).
+  (drawn on a copy of the board). `render` is the plain frame — the pipe, the script and the
+  tests get it byte for byte — and `fit` is the same frame measured for a window:
+  `boardLines`/`boardWidth`/`boardRows` say what the board block costs at pitch 1 or 2, the
+  journal is wrapped to the window and keeps its newest rows, and the frame is padded to the
+  window exactly. A window that cannot pay for the board keeps the board whole and returns
+  `shortRows`/`shortCols`/`noteRows`: the note of what is missing is painted under the board —
+  where a scrolling window leaves it — and is tiered by width, from
+  `15 rows needed (this: 10) - a 9x9 board whole …` to `15 → 10 rows` in a window of 12
+  columns, so a narrow window keeps the two numbers it has room for. A board wider than the
+  window is put at pitch 1, and told.
 
 ## `src/cli/`
 
@@ -60,7 +82,19 @@
   line), in-game
   commands (`help`, `board`, `moves`, `history`, `hint`, `undo`, `rules`, `save`,
   `resign`, `quit`), scripted games from `--moves`, records from `--record`, signal
-  handlers that always restore the terminal.
+  handlers that always restore the terminal. In a terminal it paints one frame that fits the
+  window (`Display.fit`, with two rows reserved for the prompt), on the alt screen, and
+  paints it again when the window is resized; the journal of the session is kept as lines and
+  given up oldest first. A text longer than the window — `rules`, `help`, `moves`, `history` —
+  is read on a page: `showPage` puts the input line away so a page key is not typed into the
+  command the player is about to write, and `pagedPages` reads one raw key at a time (`space`,
+  `n`, `→`, `↓`, `enter` next; `b`, `←`, `↑`, `pageup` back; `pagedown` a screen; `g`/`home`
+  first, `G` last; `q`, `Esc`, `End`, ctrl-c out), repaginates on a resize while keeping the
+  row the page began at, pads every page to the window so the prompt never moves, and tells
+  the keys in the words the window has room for. Ctrl-c is answered where `readline/promises`
+  sends it — on the interface — and wakes the input line that is waiting, so the terminal is
+  restored and the record written. A pipe, a script, a test: the plain frame, the text whole,
+  no escapes.
 
 ## `src/net/` — the web server and the API (no framework)
 
@@ -135,30 +169,51 @@
 
 ## `web/` — the browser client (no build step)
 
-- **index.html** — board panel, setup card (variant, size, seat, level, thinking time,
-  search ceiling),
-  this-game card (id, who holds each seat, ply, legal moves, what the next AI move may
-  cost, what the AI last did), the
-  agent card with the `curl` commands of the current game — open, read, move, the lobby,
-  the one that watches it — the rules, the list of open games.
+- **index.html** — one window, the board filling it: a head (`#status` with the variant,
+  the size, the turn, the ply, the six tabs and the actions of the game), the board stage
+  (`#board`, and `#fit-note` under it), the strip of play buttons, and six `section.sheet`
+  panels over the board — setup (variant, size, seat, level, thinking time, search ceiling),
+  this game (id, who holds each seat, ply, legal moves, what the next AI move may cost, what
+  the AI last did), the record, the rules, the agent panel with the `curl` commands of the
+  current game — open, read, move, the lobby, the one that watches it — and the list of open
+  games. Nothing on the page scrolls: a sheet is a card bounded by the window, with its own
+  scrolling body.
 - **style.css** — the theme: a wooden board, round pieces, castle/throne/escape marks,
-  hint and last-move highlights, a responsive two-column layout.
-- **squares.js** — the coordinates of the page, in one file: `squareOfIndex(size, r, c)` names
-  the cell the browser clicked and `indexOfSquare(size, square, files)` finds the cell of a name
-  the API sent, rank 1 being the top row — the way `src/rules/notation.js` reads a move and the
-  terminal prints the board. It loads before `app.js`, and `tests/server.test.js` pins it to
-  `formatSquare` square by square on every size, so the piece you click is the piece the server
-  moves. `require` gives it to the tests, a script tag gives the page the one global
-  `clitaflSquares`, and the file is inside a function: the scripts of a page share one scope, and
-  a top level name of the same spelling in two of them is a page that never loads. `app.js` takes
-  it as one object, and a test compiles the two files together to keep it that way.
+  hint and last-move highlights. The page is `100dvh` with `overflow: hidden`: a grid of head,
+  stage, strip, the stage centring the board; the square size, the gap and the padding arrive
+  as `--sq`, `--gap`, `--pad` and a `--scale` (`zoom`, because a grid item that overflows is
+  not centred by `transform`), so the board is as big as the window and never wider. A sheet
+  card is capped at `94dvh` and its body scrolls; the tabs, the note under the board and the
+  strip give way in tiers as the window narrows.
+- **squares.js** — the coordinates of the page, and its geometry, in one file.
+  `squareOfIndex(size, r, c)` names the cell the browser clicked and `indexOfSquare(size,
+  square, files)` finds the cell of a name the API sent, rank 1 being the top row — the way
+  `src/rules/notation.js` reads a move and the terminal prints the board. The geometry walks
+  the square size down from `SQ_MAX` (84) to `SQ_MIN` (10) until `boardBox(size, sq)` fits the
+  side it was given, with `boardGap` and `boardPad` following the size of a cell, and
+  `boardScale` giving the fraction for a window too small for a readable cell — so the board
+  is scaled whole, never cut, on a phone as on a monitor. It loads before `app.js`, and
+  `tests/server.test.js` pins it to `formatSquare` square by square on every size, so the
+  piece you click is the piece the server moves, and pins the fit: the box the geometry
+  answers is never wider than the side it was measured for, at every size and every window
+  from 200 px up. `require` gives it to the tests, a script tag gives the page the one global
+  `clitaflSquares`, and the file is inside a function: the scripts of a page share one scope,
+  and a top level name of the same spelling in two of them is a page that never loads.
+  `app.js` takes it as one object, and a test compiles the two files together to keep it that
+  way.
 - **app.js** — one `fetch` per action: it renders exactly what the API sends, clicks
-  squares into moves from `legal_moves`, and never invents a rule of its own. It also
+  squares into moves from `legal_moves`, and never invents a rule of its own. `fitBoard`
+  measures the stage and writes `--sq`, `--gap`, `--pad`, `--scale` and the note of what the
+  window cannot show, and is called on every `resize`, every `ResizeObserver` tick, every
+  sheet opened and closed, and every `fullscreenchange`. The six panels are sheets: one is
+  open at a time, the tabs say which, `1`…`6` open them, `Esc` gives the board back, `f` asks
+  for full screen, and a click outside a card closes it. It also
   opens an `EventSource` on the game it shows, so a move played from a terminal, a script
   or another tab lands on the board by itself, and says so when the game is closed. The
   move `curl` it prints carries `x-clitafl-token` when the game has a seat a token guards,
   the meta panel answers the budget of the next AI move (clock, node ceiling, depth
-  ceiling), and the opening `curl` carries the search ceiling picked in the setup card.
+  ceiling, and whether the last AI move ran out of room), and the opening `curl` carries the
+  search ceiling picked in the setup card.
 
 ## `tests/` — `node:test`, run with `npm test`
 
@@ -186,7 +241,8 @@
   openings.
 - **display.test.js** — 13 tests: the board frame, file letters aligned on their column at
   every size, glyphs, `--ascii`, colour on/off, legend counts, status, outcome, banner,
-  animation safety, the command list, and the rules text of tablut and of alea evangelii.
+  animation safety, the command list, and the rules text of tablut and of alea evangelii —
+  the text of a frame a pipe, a script and `GET /api/games/:id/rules` all share.
 - **headless.test.js** — 9 tests: seeded RNG, full games per variant, record shape,
   determinism on a node budget, mixed strengths, a depth ceiling keeping a grandmaster ply
   inside the node ceiling, custom sizes, progress.
@@ -212,16 +268,24 @@
   whose socket is gone being dropped), the state directory: a game written as a save
   file at once and after every move, read back by a second store with its seats, levels,
   clocks and seed and played on, the file going with a DELETE and a sweep, the newest
-  games loaded first up to the slots, a broken file left alone, an old game pruned, and the
+  games loaded first up to the slots, a broken file left alone, an old game pruned, the
+  ceilings read as a ceiling and not a floor — a search that ran out of room spending the
+  nodes it was given, a search that solved the tree stopping under them and saying so with
+  `aborted` — and the
   lobby: an open seat listed and joined once and then played by its token alone (`401`
   without one, `409` while the seat is open, the token never in a state view), two agents
   with one token each and neither playing the other's seat, a seat handed to the AI or back
   to the caller giving its token up and a new owner getting a new one, and the seat, its
   name and its token coming back off the state directory.
-- **server.test.js** — 16 tests: over a real socket — the page, CSS and JS and the square
+- **server.test.js** — 18 tests: over a real socket — the page, CSS and JS and the square
   names of the page answering `formatSquare` on sizes 7 to 19 (the cell you click is the piece
   the API moves, the script that names them loading before the code that uses it, and the two
-  scripts of the page compiling in one scope without declaring a name twice),
+  scripts of the page compiling in one scope without declaring a name twice), that the square
+  geometry of the page answers a board box that fits the window it is given at every size from
+  5 to 19 and every window from 200 px up, the small ones scaled, and that the page is one
+  window: the body overflow hidden, the height `100dvh`, no scroll container on the shell, a
+  sheet card capped to the window, the board stage taking the room left over, and the fit
+  repainted on resize and on full screen,
   HEAD, traversal
   probes, JSON over HTTP, CORS preflight (including the token header), broken JSON, missing
   files, `405`, the body cap, the game cap, `serve` on a free port, a state directory behind
@@ -232,6 +296,22 @@
   `ply` and `state` a move produces, the `closed` frame that ends the response, the
   `:ping` comment on a quiet game, the cap answered as a `409`, and a client that hangs up
   stopping being a watcher.
+- **tui.test.js** — 18 tests: the terminal as a window — `geometry` and a resize (a pipe
+  falling back to the size a terminal has by default), `strip`/`width` of a styled line, `fit`
+  cutting to the window with the ellipsis inside one column and the styles closed before it,
+  `wrap` breaking on the spaces and cutting a word longer than the window, `cut`/`cutStart`
+  meeting in the middle, the key names a terminal sends (both spellings of every arrow, home,
+  end, the two page keys, escape, ctrl-c), the screen escapes being gated on a terminal and
+  not on colour, the board block being exactly as wide as `boardWidth` promises at pitch 1 and
+  2 on six variants, `Display.fit` giving a frame of exactly the window with the journal
+  newest-first and dropping the journal, the legend and the blank before the board in that
+  order, a window too short keeping the board whole with its counts under it, a window too
+  narrow saying the same for its columns and keeping the two numbers it has room for, and the
+  pager: `showPage` putting the input line away, one paint per key, the page counter answering
+  every key, a page repaginating for a window resized under it, the footer tiers (the whole
+  list of keys in a wide window, the counter alone in a narrow one) every one of them inside
+  the window, a page of one screen being one page, and a key that turns nothing repainting
+  it.
 
 ## Docs
 

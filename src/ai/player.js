@@ -56,6 +56,7 @@ class AIPlayer {
         time_ms: 0,
         tt_size: this.table.size,
         source: 'book',
+        aborted: false,
       };
       return { move: prepared, info: this.lastInfo };
     }
@@ -84,6 +85,11 @@ class AIPlayer {
       time_ms: elapsed,
       tt_size: result.ttSize,
       source: 'search',
+      /* True when the clock or the node ceiling cut the search short, which is
+       * the difference between "this is what the position is worth" and "this
+       * is the best I had when I ran out of room": a client shows the first as
+       * an evaluation, and the second as a search. */
+      aborted: Boolean(result.aborted),
     };
     return { move: pick.move, info: this.lastInfo };
   }

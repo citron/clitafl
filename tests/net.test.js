@@ -554,7 +554,10 @@ test('a node ceiling is obeyed: the search costs the work the caller named', () 
   const ai = out.body.game.last_ai;
   assert.equal(ai.source, 'search', 'the position is past the book, so the search played it');
   assert.equal(ai.max_nodes, 4000, 'the reply names the ceiling the move obeyed');
-  assert.ok(ai.nodes >= 4000 && ai.nodes < 8000, `the search spent its ceiling and stopped: ${ai.nodes}`);
+  // A ceiling is a ceiling, not a floor: a position the search solves under
+  // it stops on its own, and `aborted` is what tells the two apart.
+  if (ai.aborted) assert.ok(ai.nodes >= 4000 && ai.nodes < 8000, `a search cut short spent its ceiling: ${ai.nodes}`);
+  else assert.ok(ai.nodes < 4000, `a search that solved the tree stopped under the ceiling: ${ai.nodes}`);
   assert.ok(Number.isFinite(ai.time_ms) && ai.time_ms >= 0, 'the reply says what the move cost in time as well');
 
   // One call can spend more than the game's ceiling: a client that wants a deeper
@@ -563,8 +566,10 @@ test('a node ceiling is obeyed: the search costs the work the caller named', () 
   const deep = deeper.body.game.last_ai;
   assert.ok(deep.nodes > ai.nodes, `a per-call ceiling buys a deeper search: ${deep.nodes} over ${ai.nodes}`);
   // The count is checked every 1 024 nodes and the walk out of the tree counts too, so
-  // the reply spends its ceiling rounded up on that tick, plus the unwind.
-  assert.ok(deep.nodes >= 30000 && deep.nodes < 60000, `and stops near the ceiling it was given: ${deep.nodes}`);
+  // a search that runs out of room spends its ceiling rounded up on that tick.
+  assert.ok(deep.nodes >= ai.nodes, `a deeper call never costs less: ${deep.nodes} under ${ai.nodes}`);
+  if (deep.aborted) assert.ok(deep.nodes >= 30000 && deep.nodes < 60000, `and stops near the ceiling it was given: ${deep.nodes}`);
+  else assert.ok(deep.nodes < 30000, `a call that searched the whole tree stopped under its ceiling: ${deep.nodes}`);
   assert.equal(deep.max_nodes, 30000);
   assert.equal(out.body.game.budget.attacker.max_nodes, 0, 'the game itself keeps the ceiling it was opened with');
 
@@ -587,7 +592,23 @@ test('a hint, too, obeys the ceiling of the call that asks for it', () => {
   // search that finishes early. Ask for real work and the hint spends it.
   const deep = req(store, 'POST', `/api/games/${id}/hint`, { body: { max_nodes: 40000, max_depth: 40, time_ms: 60000 } });
   assert.equal(deep.status, 200, JSON.stringify(deep.body));
-  assert.ok(deep.body.hint.nodes >= 40000 && deep.body.hint.nodes < 80000, `a deep hint costs the work it asked for: ${deep.body.hint.nodes}`);
+  const cheapHint = cheap.body.hint;
+  const deepHint = deep.body.hint;
+  assert.ok(deepHint.nodes >= cheapHint.nodes, `a deeper hint never costs less: ${deepHint.nodes} under ${cheapHint.nodes}`);
+  if (deepHint.aborted) {
+    // The count is checked every 1 024 nodes, plus the walk out of the tree.
+    assert.ok(deepHint.nodes >= 40000 && deepHint.nodes < 80000, `a hint cut short spent the ceiling it asked for: ${deepHint.nodes}`);
+  } else {
+    // A position the search solves - a mate it can see all the way to - is
+    // searched at any ceiling for the same few nodes: the depth is the ceiling
+    // that bites, and the depth it reached is what the extra room bought.
+    assert.ok(deepHint.nodes < 40000, `a hint that solved the tree stopped under its ceiling: ${deepHint.nodes}`);
+    if (deepHint.depth > cheapHint.depth) {
+      assert.ok(deepHint.nodes > cheapHint.nodes,
+        `the deeper hint searched the deeper tree: ${deepHint.nodes} over ${cheapHint.nodes}`);
+    }
+  }
+  assert.equal(typeof deepHint.aborted, 'boolean', 'the hint says whether the search ran out of room');
 
   const before = cheap.body.game.ply;
   const shallow = req(store, 'POST', `/api/games/${id}/hint`, { body: { max_depth: 1, max_nodes: 0, time_ms: 60000 } });

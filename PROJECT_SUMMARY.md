@@ -8,8 +8,8 @@ renderer, a web board and an HTTP API an agent can drive. JavaScript on Node.js 
 CommonJS, **no runtime dependencies**, no build step.
 
 ```
-159 tests · 22 source files + 4 web files · ~6 000 lines of engine, AI, UI, CLI and server
-(~9 500 with the tests)
+179 tests · 22 source files + 4 web files · ~7 000 lines of engine, AI, UI, CLI, server and
+page (~11 000 with the tests)
 ```
 
 ## Why version 2 exists
@@ -151,6 +151,27 @@ The opening book was regenerated on the new geometry (428 positions), and the Zo
 now hashes the two new flags, so a position from the old book is never offered under the
 new rules.
 
+## Why version 2.8 exists
+
+The game played correctly on every door, but both boards asked the player to scroll: the web
+page ran its panels below the fold on a laptop and clipped the board on a phone, and the
+terminal printed a frame that a short window cut in half — the top rows of the previous frame
+left behind, the board's last rank under the prompt, and a `rules` text that ran off the top
+of the screen.
+
+| problem | now |
+| --- | --- |
+| a web page that scrolled | one window: `body{overflow:hidden}`, a `100dvh` grid of head, board stage, strip, and the record, rules, agents, setup, this game and the list of games as six sheets over the board, each a card capped to the window with its own scrolling body (`Esc` gives the board back, `1`…`6` and `f` for full screen) |
+| a board that overflowed its window | the square size is in the one file that owns the coordinates, `web/squares.js`: `fitSquare` walks a cell down from 84 px to 10 until `boardBox` fits the stage, `boardGap`/`boardPad` follow the size of a cell, and a window too small for a readable cell scales the whole board (`zoom`, because a grid item that overflows is not centred by `transform`) — never cut |
+| a page that stopped fitting when the window changed | `fitBoard` runs on `resize`, on a `ResizeObserver` tick, on every sheet opened and closed, and on `fullscreenchange`, and one line under the board says what the window cannot show |
+| a terminal frame that scrolled | `Display.fit` measures the frame for the window — status, board, last move, legend, journal — pads it to the window exactly, and gives up the journal, then the legend, then the blank above the board, oldest and least useful first, so the prompt never moves and no row of the last frame survives |
+| a window too small for the board | the board stays whole, at pitch 1, and the note of what is missing is painted under it, tiered by width: `15 rows needed (this: 10) - a 9x9 board whole…`, then `- enlarge the terminal`, then `15 → 10 rows` — the two numbers a player can act on are the last thing a narrow window gives up |
+| a long text running off the screen | `rules`, `help`, `moves` and `history` are read on a page that owns the keyboard: `space`, `n`, `→`, `↓`, `enter` turn it, `b`, `←`, `↑`, `pageup` turn it back, `pagedown` jumps a screen, `g`/`home` and `G` go to the ends, `q`, `Esc`, `End` and ctrl-c give the board back; the page repaginates on a resize and its footer is told in the words the window has room for |
+| a page key typed into the next command | the page puts the input line away and reads raw keys, so `rules` + `q` is not `rulesq`; a key sequence is named by `Ansi.keyName` — both spellings of an arrow, home, end, the page keys, escape |
+| a pipe being styled like a terminal | the screen escapes are gated on the output being a terminal, on their own and independently of colour, so `--no-color` in a terminal keeps one clean frame and a pipe, a script and the tests get the frame byte for byte |
+| ctrl-c in the middle of an input line | answered where `readline/promises` sends it — on the interface — and waking the line that is waiting, so the terminal is restored, the note is left on the screen and the record is written |
+| a search that ran out of room reading as one that finished | the AI info, `last_ai` and the `/hint` payload answer `aborted`, and the ceiling tests read it: a search cut short spends the nodes it was given, a search that solved the tree stops under them |
+
 ## Design decisions
 
 - **Data, not code, for the rules.** A variant is a row in `src/rules/variants.js`:
@@ -253,7 +274,7 @@ src/net/       errors · state · store · disk · api · server
 src/           headless.js · index.js
 tools/         make-book.js
 web/           index.html · style.css · squares.js · app.js
-tests/         board · game · notation · ai · display · headless · cli · net · server (+ helpers)
+tests/         board · game · notation · ai · display · headless · cli · tui · net · server (+ helpers)
 ```
 
 ## Status
@@ -268,19 +289,24 @@ tests/         board · game · notation · ai · display · headless · cli · 
   matches; plays out every variant headlessly.
 - CLI: `play`, `demo`, `match`, `serve`, `variants`, `rules`, `help`; flags for seats,
   strength, budget (clock, nodes, depth), size, seeds, scripts, saves, records, host, port,
-  game slots, watchers per game, state directory, TTL, plain-ASCII and colour-off.
+  game slots, watchers per game, state directory, TTL, plain-ASCII and colour-off. In a
+  terminal it is one frame that fits the window — the board whole, the journal as long as the
+  window pays for, a resize repainting it, and the long texts on pages — and the plain frame,
+  byte for byte, on a pipe.
 - Web: a board page served by the same process — click-to-move, seat, level and search-ceiling
   pickers, record, hint, AI moves, undo, resign, save, an agent panel with the `curl` of the
   current game, and a stream it watches so a move played elsewhere lands on the board by itself.
-  The cells are named as the engine names them, and a test pins that: the piece you click is the
-  piece the server moves — and the scripts of the page compile in one scope, declaring no name
-  twice.
+  It is one window that never scrolls: the board fills it, sized from the room left over and
+  scaled whole when the window is small, and every panel is a sheet over it. The cells are named
+  as the engine names them, and tests pin that: the piece you click is the piece the server
+  moves, no square the page draws is wider than the window it is measured in, the page has no
+  scroll, and the scripts of the page compile in one scope, declaring no name twice.
 - API: 21 JSON endpoints, self-describing, CORS open, a session store with slots, TTL,
   watchers and an optional state directory, a lobby where an open seat goes to the first
   client that takes it — with the token that plays it —, a Server-Sent Events stream per
   game, per-seat AI budgets (clock, nodes, depth) answered in the state, save-file
   round-trips, one message per error.
-- Tests: 159, all green, `npm test`, no dependencies. Hours of self-play — 6 variants ×
+- Tests: 179, all green, `npm test`, no dependencies. Hours of self-play — 6 variants ×
   7 sizes × 6 modes, random, greedy and every AI level — checked ply by ply against an
   independent model of the geometry and of the captures: no violation.
 - Docs: README, QUICKSTART, FILES, this summary, ISC licence.

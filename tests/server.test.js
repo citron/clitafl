@@ -9,7 +9,7 @@ const { spawn } = require('node:child_process');
 
 const { serve, staticFile, MAX_BODY_BYTES } = require('../src/net/server');
 const { formatSquare } = require('../src/rules/notation');
-const { squareOfIndex, indexOfSquare } = require('../web/squares');
+const { squareOfIndex, indexOfSquare, fitSquare, boardScale, boardBox, SQ_MIN, SQ_MAX } = require('../web/squares');
 
 const ROOT = path.join(__dirname, '..');
 const ENTRY = path.join(ROOT, 'src', 'index.js');
@@ -134,6 +134,102 @@ test('the scripts of the page share the scope of the page, and share no name', (
     'and a script asked for twice is the same scope twice');
   assert.match(appSrc, /const squares = window\.clitaflSquares;/,
     'so the page takes the coordinates as one object, never as two names of its own');
+});
+
+test('the board is drawn at the size of the window it is given, never bigger than it', () => {
+  const windows = [
+    [1920, 1080], [1280, 800], [1024, 768], [900, 600], [700, 480], [412, 700], [360, 640], [320, 240], [120, 120],
+  ];
+  for (const size of [7, 9, 11, 13, 15, 17, 19]) {
+    for (const [w, h] of windows) {
+      const side = Math.min(w, h);
+      const cell = fitSquare(size, w, h);
+      const box = boardBox(size, cell);
+      const scale = boardScale(size, w, h);
+
+      assert.ok(cell >= SQ_MIN && cell <= SQ_MAX,
+        `${size}x${size} in ${w}x${h}: a cell of ${cell}px is outside the readable range ${SQ_MIN}..${SQ_MAX}`);
+      assert.equal(box.w, box.h, `${size}x${size} at ${cell}px: the board is square`);
+      assert.ok(scale <= 1, `${size}x${size} in ${w}x${h}: a board is never drawn larger than asked`);
+      assert.ok(Math.round(box.w * scale) <= side + 1,
+        `${size}x${size} in ${w}x${h}: ${Math.round(box.w * scale)}px of board does not fit in ${side}px of window`);
+
+      if (cell < SQ_MAX) {
+        /* The cell is the best fit, not a guess: one pixel more is a board
+         * that leaves the window, so nothing is given away. */
+        assert.ok(boardBox(size, cell + 1).w > side,
+          `${size}x${size} in ${w}x${h}: a board of ${cell + 1}px cells fits, so ${cell}px leaves the window too small`);
+      }
+      if (box.w <= side) assert.equal(scale, 1, `${size}x${size} in ${w}x${h} fits, so it is not scaled`);
+      else assert.ok(scale < 1, `${size}x${size} in ${w}x${h} does not fit, so the whole board is scaled down`);
+    }
+
+    /* Growing the window never shrinks the board. */
+    let last = 0;
+    for (const side of [100, 160, 240, 360, 520, 720, 980, 1400]) {
+      const cell = fitSquare(size, side, side);
+      assert.ok(cell >= last, `${size}x${size}: ${side}px of window gives a smaller cell than ${side - 120}px (${last} -> ${cell})`);
+      last = cell;
+    }
+  }
+
+  /* No window at all is not a crash: the page gets the smallest cell. */
+  assert.equal(fitSquare(9, 0, 0), SQ_MIN, 'a window with no size gets the smallest cell');
+  assert.equal(boardScale(9, 0, 0), 1, 'and no scaling, which would divide by nothing');
+});
+
+test('the page is one window: only a sheet scrolls, and the board follows the window', () => {
+  const css = fs.readFileSync(path.join(WEB, 'style.css'), 'utf8');
+  const html = fs.readFileSync(path.join(WEB, 'index.html'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8');
+
+  assert.match(css, /body \{[^}]*overflow: hidden/, 'the page itself cannot scroll: one window, like a game screen');
+  assert.match(css, /\.app \{[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto/,
+    'state strip, board, actions: the board takes exactly what the window leaves it');
+  assert.match(css, /\.app \{[^}]*height: 100dvh/, 'the screen is the window, on a phone with a changing bar as on a desktop');
+  assert.match(css, /\.stage \{[^}]*overflow: hidden/, 'the board is sized into the stage, so it cannot push the page open');
+  assert.match(css, /\.board \{[^}]*zoom: var\(--scale/,
+    'a window too small for the smallest readable board gets the whole board scaled, never one cut off at an edge');
+  assert.match(css, /\.sheet-card \{[^}]*max-height: 94dvh/, 'a sheet is bounded by the window it opens in');
+  assert.match(css, /\.sheet-body \{[^}]*overflow: auto/, 'a sheet is the one box that has its own scroll');
+
+  /* The only boxes in the page that may scroll are a sheet and a text field.
+   * Anything else that grows is a page that scrolls. */
+  const scrollable = [];
+  for (const block of css.split('}')) {
+    const open = block.lastIndexOf('{');
+    if (open < 0) continue;
+    if (!/overflow(-x|-y)?:\s*(auto|scroll)/.test(block.slice(open))) continue;
+    scrollable.push(block.slice(0, open).trim().split('\n').pop().trim().replace(/\s+/g, ' '));
+  }
+  assert.deepEqual(scrollable.sort(), ['.sheet-body', 'textarea'],
+    `only a sheet and a text field may scroll, and these do: ${scrollable.join(', ')}`);
+
+  /* Every element the client reaches for is on the page: a missing id is a
+   * control that silently stops working, which a browser reports as nothing. */
+  const cache = appSrc.slice(appSrc.indexOf('function cacheElements'));
+  const ids = [...cache.slice(0, cache.indexOf('}')).matchAll(/'([\w-]+)'/g)].map((match) => match[1]);
+  assert.ok(ids.length >= 30, `the client caches the elements it uses (${ids.length})`);
+  for (const id of ids) {
+    assert.ok(html.includes(`id="${id}"`), `the client asks for #${id}, and the page has no such element`);
+  }
+
+  const sheets = [...html.matchAll(/<section class="sheet" id="([\w-]+)"/g)].map((match) => match[1]);
+  assert.equal(sheets.length, 6, `every panel is a sheet over the board (${sheets.length})`);
+  for (const id of sheets) {
+    assert.ok(html.includes(`data-sheet="${id}"`), `the ${id} sheet has a tab in the strip`);
+    const block = html.slice(html.indexOf(`id="${id}"`), html.indexOf('</section>', html.indexOf(`id="${id}"`)));
+    assert.match(block, /class="sheet-body"/, `the ${id} sheet keeps its content in a box bounded by the window`);
+    assert.match(block, /data-close/, `the ${id} sheet can be closed`);
+  }
+
+  /* The window is the board's size: every way it changes refits the game. */
+  assert.match(appSrc, /window\.addEventListener\('resize', fitBoard\)/, 'a resize refits the board');
+  assert.match(appSrc, /new ResizeObserver\(\(\) => fitBoard\(\)\)\.observe\(elements\.stage\)/,
+    'a stage that changes size without the window does, too');
+  assert.match(appSrc, /document\.addEventListener\('fullscreenchange', fitBoard\)/, 'so does going full screen');
+  assert.match(appSrc, /squares\.boardScale\(/, 'the client asks the shared geometry how far to scale');
+  assert.match(appSrc, /setProperty\('--scale'/, 'and hands it to the page as the CSS reads it');
 });
 
 test('the web client is served, and a HEAD request carries the length without the body', async () => {

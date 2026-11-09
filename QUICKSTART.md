@@ -15,7 +15,7 @@ node src/index.js demo --variant copenhagen             # watch the AI play itse
 node src/index.js match --variant ard-ri --seed 3       # a whole game, printed as a record
 ```
 
-`npm start` does the same as the first line. `npm test` runs the 159 tests.
+`npm start` does the same as the first line. `npm test` runs the 179 tests.
 
 ## Play in the browser
 
@@ -30,6 +30,13 @@ the record, hint, undo, resign and save. Nothing to build: it is one HTML file, 
 file and two JS files calling the API. Squares are named as the API names them — the file
 letters from the left, the rank numbers from the top, so the top left cell is `a1` —, and the
 board you click is the board the server holds.
+
+The page is one window and nothing on it scrolls. The board takes the whole window — its
+squares are sized to the room left over, and a window too small for a readable cell scales
+the board whole rather than cut it — and the pickers, this game, the record, the rules, the
+`curl` commands of an agent seat and the list of open games are six sheets over it: the tabs,
+or `1`…`6`. `Esc` gives the board back, `f` takes the window full screen, and a resize — or
+turning a phone — repainted the board on the spot.
 
 ## Play from a script, or as an AI agent
 
@@ -88,6 +95,14 @@ the top left. The attackers move first.
 Type `moves` to see every move you have, `hint` to see what the AI suggests, `board` to
 redraw, `undo` to take a move back, `save mygame.json` to write a save file,
 `help` for the rest.
+
+The screen is one frame, and it does not scroll: the board is drawn whole, as large as the
+terminal allows, with the state above it and the journal below it, and the prompt never
+moves. Resize the terminal and the frame is painted again for the window you have — a window
+too small for the board keeps the board and counts what is missing under it. A text longer
+than the window (`rules`, `help`, `moves`, `history`) is turned on its own page: `space` and
+`→` turn it, `b` and `←` turn it back, `g` and `G` go to the first and the last page, `q`
+gives the board back.
 
 ## Save, resume, record
 

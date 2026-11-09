@@ -2,56 +2,65 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
 <title>clitafl — the Tafl game of the Vikings</title>
 <meta name="description" content="Hnefatafl / Tafl in the browser: six historical variants from 7x7 to 19x19, a search AI, and an HTTP API for agents.">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231b1410'/><text x='16' y='23' font-size='18' text-anchor='middle' fill='%23e8c07d'>♞</text></svg>">
 </head>
 <body>
-<header class="topbar">
-  <h1>clitafl</h1>
-  <p class="tagline">Tafl in the browser — six historical variants from 7×7 to 19×19, a search AI, an API for agents</p>
-  <nav class="topnav">
-    <a href="#play">board</a>
-    <a href="#setup">new game</a>
-    <a href="#agent">agent</a>
-    <a href="#rules">rules</a>
-  </nav>
-</header>
 
-<main>
-  <section id="play" class="board-panel">
-    <div class="statusbar">
-      <span id="variant-name" class="variant-name">Tablut</span>
-      <span id="turn" class="turn"></span>
-      <span id="counts" class="counts"></span>
-      <span id="status" class="status"></span>
-    </div>
+<!-- One window, no page scroll: the board is the whole middle of the screen and
+     every panel is a sheet over it, bounded by the window itself. The board is
+     drawn at the size of the window, so resizing it resizes the game. -->
+<div class="app" id="app">
 
+  <header class="hud">
+    <h1 class="brand">clitafl</h1>
+    <span id="variant-name" class="variant-name">Tablut</span>
+    <span id="turn" class="turn"></span>
+    <span id="counts" class="counts"></span>
+    <span id="status" class="status"></span>
+    <span id="fit-note" class="fit-note" role="status"></span>
+    <nav class="tabs" aria-label="panels">
+      <button type="button" class="tab" data-sheet="sheet-setup" aria-expanded="false" title="variant, size, seats, strength — key 1">new game</button>
+      <button type="button" class="tab" data-sheet="sheet-game" aria-expanded="false" title="this game: id, seats, record, AI budget — key 2">this game</button>
+      <button type="button" class="tab" data-sheet="sheet-record" aria-expanded="false" title="the whole record — key 3">record</button>
+      <button type="button" class="tab" data-sheet="sheet-agent" aria-expanded="false" title="the API calls of this game — key 4">agent</button>
+      <button type="button" class="tab" data-sheet="sheet-rules" aria-expanded="false" title="the rules of this variant — key 5">rules</button>
+      <button type="button" class="tab" data-sheet="sheet-games" aria-expanded="false" title="the games open on this server — key 6">games</button>
+    </nav>
+  </header>
+
+  <main id="stage" class="stage">
     <div id="board" class="board" role="grid" aria-label="tafl board"></div>
+  </main>
 
-    <div class="underboard">
-      <p id="message" class="message" role="status" aria-live="polite"></p>
-      <div class="actions">
-        <button type="button" id="btn-hint" title="search a move without playing it">hint</button>
-        <button type="button" id="btn-ai" title="let the AI seats play">AI moves</button>
-        <button type="button" id="btn-undo" title="take back one ply">undo</button>
-        <button type="button" id="btn-resign" title="resign for the side to move">resign</button>
-        <button type="button" id="btn-export" title="download the save file">save</button>
-        <button type="button" id="btn-refresh" title="reload the state from the server">refresh</button>
-      </div>
+  <footer class="strip">
+    <ol id="last-moves" class="last-moves" aria-label="the last moves"></ol>
+    <p id="message" class="message" role="status" aria-live="polite"></p>
+    <div class="actions">
+      <button type="button" id="btn-hint" title="search a move without playing it">hint</button>
+      <button type="button" id="btn-ai" title="let the AI seats play">AI moves</button>
+      <button type="button" id="btn-undo" title="take back one ply">undo</button>
+      <button type="button" id="btn-resign" title="resign for the side to move">resign</button>
+      <button type="button" id="btn-export" title="download the save file">save</button>
+      <button type="button" id="btn-refresh" title="reload the state from the server">refresh</button>
+      <button type="button" id="btn-full" title="fill the screen with the board (F)">full board</button>
     </div>
+    <span id="version" class="version"></span>
+  </footer>
 
-    <section class="record">
-      <h2>record</h2>
-      <ol id="history" class="history"></ol>
-    </section>
-  </section>
+</div>
 
-  <aside class="side">
-    <section id="setup" class="card">
-      <h2>new game</h2>
+<section class="sheet" id="sheet-setup" hidden>
+  <div class="sheet-card">
+    <header class="sheet-head">
+      <h2 id="setup-title">new game</h2>
+      <button type="button" class="sheet-close" data-close title="close (Esc)">close</button>
+    </header>
+    <div class="sheet-body">
       <label class="field">
         <span>variant</span>
         <select id="variant"></select>
@@ -117,10 +126,17 @@
         <button type="button" id="btn-swap" title="swap the seats">swap seats</button>
       </div>
       <p class="hint-text" id="levels-note"></p>
-    </section>
+    </div>
+  </div>
+</section>
 
-    <section class="card">
+<section class="sheet" id="sheet-game" hidden>
+  <div class="sheet-card">
+    <header class="sheet-head">
       <h2>this game</h2>
+      <button type="button" class="sheet-close" data-close title="close (Esc)">close</button>
+    </header>
+    <div class="sheet-body">
       <dl class="meta">
         <dt>id</dt><dd id="meta-id">—</dd>
         <dt>seats</dt><dd id="meta-seats">—</dd>
@@ -130,13 +146,32 @@
         <dt>AI last move</dt><dd id="meta-ai">—</dd>
       </dl>
       <p class="hint-text">a seat marked <code>agent / client</code> is played from outside the browser: the
-        <a href="#agent">API calls</a> below drive it. A seat opened to the lobby is played only by the client
-        holding its token, which <code>GET /api/lobby</code> offers to whoever asks.</p>
-    </section>
+        <button type="button" class="linklike" data-sheet="sheet-agent">API calls</button> drive it. A seat opened to the
+        lobby is played only by the client holding its token, which <code>GET /api/lobby</code> offers to whoever asks.</p>
+    </div>
+  </div>
+</section>
 
-    <section id="agent" class="card">
-      <h2>play it from a terminal, script, or agent</h2>
-      <p class="hint-text">every game is plain JSON over HTTP. Copy these as they are — they match the board above.</p>
+<section class="sheet" id="sheet-record" hidden>
+  <div class="sheet-card">
+    <header class="sheet-head">
+      <h2>record</h2>
+      <button type="button" class="sheet-close" data-close title="close (Esc)">close</button>
+    </header>
+    <div class="sheet-body">
+      <ol id="history" class="history"></ol>
+    </div>
+  </div>
+</section>
+
+<section class="sheet" id="sheet-agent" hidden>
+  <div class="sheet-card">
+    <header class="sheet-head">
+      <h2 id="agent">play it from a terminal, script, or agent</h2>
+      <button type="button" class="sheet-close" data-close title="close (Esc)">close</button>
+    </header>
+    <div class="sheet-body">
+      <p class="hint-text">every game is plain JSON over HTTP. Copy these as they are — they match the board behind this sheet.</p>
       <label class="field">
         <span>open a game like this one</span>
         <textarea id="cmd-create" rows="4" readonly spellcheck="false"></textarea>
@@ -164,27 +199,36 @@
       <div class="actions">
         <button type="button" id="btn-copy" title="copy the selected command">copy</button>
       </div>
-    </section>
+    </div>
+  </div>
+</section>
 
-    <section id="rules" class="card">
+<section class="sheet" id="sheet-rules" hidden>
+  <div class="sheet-card">
+    <header class="sheet-head">
       <h2 id="rules-title">rules</h2>
+      <button type="button" class="sheet-close" data-close title="close (Esc)">close</button>
+    </header>
+    <div class="sheet-body">
       <pre id="rules-text" class="rules-text">loading…</pre>
-    </section>
+    </div>
+  </div>
+</section>
 
-    <section class="card">
+<section class="sheet" id="sheet-games" hidden>
+  <div class="sheet-card">
+    <header class="sheet-head">
       <h2>open games on this server</h2>
+      <button type="button" class="sheet-close" data-close title="close (Esc)">close</button>
+    </header>
+    <div class="sheet-body">
       <ul id="games" class="games"></ul>
       <div class="actions">
         <button type="button" id="btn-games" title="reload the list">reload</button>
       </div>
-    </section>
-  </aside>
-</main>
-
-<footer>
-  <p>clitafl — CLI, web board and API in one dependency-free Node package.
-    <span id="version"></span></p>
-</footer>
+    </div>
+  </div>
+</section>
 
 <script src="squares.js"></script>
 <script src="app.js"></script>

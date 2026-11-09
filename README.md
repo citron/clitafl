@@ -25,7 +25,7 @@ framework, no bundler.
 
 ```bash
 git clone <your fork> && cd clitafl
-npm test        # 159 tests, node's built-in runner, no download needed
+npm test        # 179 tests, node's built-in runner, no download needed
 ```
 
 `npm install` is not required to play. `npm link` gives you `clitafl` and `tafl` commands.
@@ -107,13 +107,21 @@ clitafl is serving
 
 With no `--nodes`, the banner leaves the ceiling line out and the clock decides each move.
 
-The board in `web/` is one page: variant, size, seat, level and search-ceiling pickers, a
-click-to-move board with the castle / throne / escape marks, the record, and hint, AI moves,
-undo, resign, save and refresh. The meta panel answers what the next AI move is allowed to
-cost, so the pause after a move has a number attached to it. A seat set to *agent / client*
-is left to the outside world: the page shows the exact `curl` commands that drive it, which
-is how a script or an AI agent takes a seat over. The page also *watches* the game it shows,
-so a move played from a terminal appears in the browser without a click.
+The board in `web/` is one page, and one window: nothing on it scrolls. The board is the
+screen — it takes the whole window, its squares sized by `web/squares.js` from the room left
+over (a window too small for a readable cell scales the board rather than cut it) — and
+everything else is a sheet over it: setup, this game, the record, the rules, the agents and
+the list of games, opened by the tabs or the keys `1`…`6` and closed by `Esc`. The setup
+sheet carries the variant, size, seat, level and search-ceiling pickers; the board carries
+the castle / throne / escape marks, and the strip under it carries hint, AI moves, undo,
+resign, save and refresh. The meta panel answers what the next AI move is allowed to cost,
+so the pause after a move has a number attached to it. A seat set to *agent / client* is
+left to the outside world: the agent sheet shows the exact `curl` commands that drive it,
+which is how a script or an AI agent takes a seat over. The page also *watches* the game it
+shows, so a move played from a terminal appears in the browser without a click. Resize,
+enter full screen (`f`) or turn a phone, and the board is measured again: `resize`,
+`ResizeObserver` and `fullscreenchange` all repaint it, and one line under it says what the
+window cannot show.
 
 The API is the same game the CLI and the page play. `GET /api` describes it as data, so a
 client can discover it without reading this file.
@@ -191,7 +199,8 @@ Notes for a client:
   same work on any server and a replayed match plays the same moves. A game answers the
   budget of each side as `budget: {attacker, defender}`, a reply plays every AI seat in
   turn so its worst case is the sum of theirs, and `last_ai` names the node ceiling the
-  move obeyed, with the time and the source — `book` or `search` — it cost.
+  move obeyed, with the time, the source — `book` or `search` — it cost, and whether the clock
+  or the ceiling cut it short (`aborted`, in the hint payload as well).
 - Bad input is a `400` with one readable sentence, a seat you do not hold is a `401`, a game
   that is over is a `409`, a route that does not exist is a `404` with a hint, and CORS is
   open (`OPTIONS` → 204).
@@ -229,6 +238,21 @@ Files are letters `a…`, ranks are numbers counted from the top left.
 
 In-game commands: `help`, `board`, `moves`, `history`, `hint`, `undo [n]`, `rules`,
 `save <file>`, `resign`, `quit`.
+
+In a terminal the screen is one frame, and it does not scroll: the status line, the board
+whole, the legend, the last move, and as much of the journal as the window pays for, padded
+to the window's height so the prompt never moves. A window too short for a whole board keeps
+the board and counts what is missing under it — `15 rows needed (this: 10) - enlarge the
+terminal`, which in a narrow window comes down to the two numbers it has room for,
+`15 → 10 rows`. A board wider than the window drops to a one-column pitch, and says so.
+Resize the terminal and the frame is painted again for the window you have now.
+
+A text longer than the window — `rules`, `help`, `moves`, `history` — is turned on its own
+page, with the keyboard given to the page: `space`, `n`, `→`, `↓` and `enter` turn it, `b`,
+`←`, `↑` and `pageup` turn it back, `pagedown` jumps a screen, `g` and `home` go to the first
+page, `G` to the last, and `q`, `Esc`, `End` and ctrl-c give the board back. A page of rules
+repaginates for the window, and its footer is told in the words the window has room for: the
+whole list of keys in a wide terminal, `→ next   q board` in a narrow one.
 
 ```
 Tablut  9x9  king escapes to the edge
@@ -293,7 +317,9 @@ budget, the depth reached depends on the machine. Both ceilings are the caller's
 door: `--nodes` / `--depth` on the CLI, `max_nodes` / `max_depth` — with an `…_a` / `…_d`
 spelling per seat — on a game, and on a `/ai` or `/hint` call that wants a deeper look than
 the game's own ceiling. The state answers the budget of each side, so the worst case of a
-reply is a number the client chose; see the API notes.
+reply is a number the client chose; see the API notes. The answer says whether the clock or
+the ceiling cut it short (`aborted`), which is the difference between an evaluation of the
+position and the best move a search had when it ran out of room.
 
 ## Headless
 
@@ -325,11 +351,14 @@ src/ai/evaluate.js      static evaluation
 src/ai/zobrist.js       deterministic hash table, keys updated in place
 src/ai/search.js        negamax + alpha-beta + transposition table + killers + quiescence
 src/ai/book.js          the opening book, checked against the legal moves
-src/ai/book.json        411 prepared positions, 10 plies deep
+src/ai/book.json        428 prepared positions, 10 plies deep
 src/ai/player.js        strength presets, noise, book hook
-src/ui/ansi.js          ANSI/terminal control, NO_COLOR, alt screen
-src/ui/display.js       board, legend, banner, rules text, move animation
-src/cli/controller.js   one session: seats, turn loop, in-game commands, cleanup
+src/ui/ansi.js          ANSI/terminal control, NO_COLOR, alt screen, the window's size,
+                        the width of a styled line, cutting and wrapping to it, key names
+src/ui/display.js       board, legend, banner, rules text, move animation, the frame fitted
+                        to a window
+src/cli/controller.js   one session: seats, turn loop, in-game commands, the frame, the
+                        pager for long texts, cleanup
 src/net/errors.js       ApiError and the status helpers: 400, 401, 404, 405, 409, 413
 src/net/state.js        the public JSON view of a game: board, moves, record, rules text
 src/net/store.js        sessions, seats, seat tokens, levels, clocks, TTL, max games, watchers
@@ -339,11 +368,13 @@ src/net/server.js       node:http: static files, CORS, body cap, /api dispatch
 src/headless.js         AI vs AI without a terminal
 src/index.js            command line, including serve
 tools/make-book.js      the book generator, seeded and deterministic
-web/index.html          the board page
-web/style.css           its theme
-web/squares.js          the coordinates: rank 1 is the top row, the way the engine names a square
-web/app.js              fetch calls, click-to-move, the agent command panel
-tests/                  node:test suites: rules, board, notation, AI, display, headless, CLI, net, server
+web/index.html          the board page: the board, the strip, the six sheets
+web/style.css           its theme, and a window that never scrolls
+web/squares.js          the coordinates — rank 1 is the top row, the way the engine names a
+                        square — and the square size that fits a window
+web/app.js              fetch calls, click-to-move, the sheets, the agent command panel
+tests/                  node:test suites: rules, board, notation, AI, display, headless,
+                        CLI, TUI, net, server
 ```
 
 ## Tests
@@ -352,7 +383,7 @@ tests/                  node:test suites: rules, board, notation, AI, display, h
 npm test
 ```
 
-159 tests on `node:test` — no framework to install. They cover the historical armies and
+179 tests on `node:test` — no framework to install. They cover the historical armies and
 castle rules of each variant (the 19×19 alea evangelii included: exits, citadel, the 4/3/2
 king capture, the marked squares capturing for both sides), the rule details the sources
 spell out — the Copenhagen edge that does not capture (rule 5), the shield wall (rule 7),
@@ -373,8 +404,15 @@ round-trips, the watchers of a game hearing every change, games written to and r
 from a state directory), and the HTTP layer over a real socket (static files, traversal
 attempts, CORS, body cap, the event stream frame by frame, a state directory behind a live
 server, the page naming every square the way `formatSquare` does — the cell you click is the
-piece the API moves —, its two scripts compiling in one scope without a name declared twice, and
-the `serve` command of the CLI started as a child process).
+piece the API moves —, its two scripts compiling in one scope without a name declared twice,
+that no square the page draws is wider than the window it is measured in, and that the page
+has no scroll: the board is the window, and a sheet is bounded by it), the terminal screen
+(the window's size, the width of a styled line, cutting and wrapping to it, the key names a
+terminal sends, the board block being as wide as `boardWidth` promises, a frame of exactly
+the window with the journal newest-first, the board whole in a window too short with its
+counts under it, the blank between the state and the board given up first, the pager turning
+one page per key with a footer the window can read, and the screen escapes only being sent in
+a terminal), and the `serve` command of the CLI started as a child process).
 
 ## Rules sources
 

@@ -570,6 +570,7 @@ class GameStore {
       score: info.score,
       time_ms: info.time_ms,
       source: info.source,
+      aborted: Boolean(info.aborted),
       max_nodes: overrides.maxNodes === undefined ? session.maxNodes[side] : overrides.maxNodes,
     };
     if (!move) {
